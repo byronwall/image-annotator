@@ -1,0 +1,703 @@
+import {
+  type ArrowAnnotation,
+  type BoxAnnotation,
+  type CropDraft,
+  type EditorDraft,
+  type ImageAnnotation,
+  type ImageEditorProject,
+  type PathAnnotation,
+  type Point,
+  type ResizeHandle,
+  type StepAnnotation,
+  type TextAnnotation,
+} from "./image-editor.types";
+
+export type Bounds = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+};
+
+const selectionColor = "#0ea5e9";
+const resizeHandleSize = 12;
+
+export const normalizeRect = (
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+): Bounds => ({
+  x: width < 0 ? x + width : x,
+  y: height < 0 ? y + height : y,
+  width: Math.abs(width),
+  height: Math.abs(height),
+});
+
+export const clampBoundsToProject = (
+  bounds: Bounds,
+  project: Pick<ImageEditorProject, "width" | "height">,
+): Bounds => {
+  const x = Math.max(0, Math.min(bounds.x, project.width));
+  const y = Math.max(0, Math.min(bounds.y, project.height));
+  const maxX = Math.max(x, Math.min(bounds.x + bounds.width, project.width));
+  const maxY = Math.max(y, Math.min(bounds.y + bounds.height, project.height));
+
+  return {
+    x,
+    y,
+    width: maxX - x,
+    height: maxY - y,
+  };
+};
+
+export const loadImageElement = (dataUrl: string): Promise<HTMLImageElement> =>
+  new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error("Unable to load image."));
+    image.src = dataUrl;
+  });
+
+export const renderImageEditorCanvas = (
+  canvas: HTMLCanvasElement,
+  baseImage: HTMLImageElement,
+  annotations: ImageAnnotation[],
+  draft: EditorDraft | undefined,
+  selectedId: string | undefined,
+) => {
+  const context = canvas.getContext("2d");
+
+  if (!context) {
+    return;
+  }
+
+  context.clearRect(0, 0, canvas.width, canvas.height);
+  context.save();
+  context.imageSmoothingEnabled = true;
+  context.drawImage(baseImage, 0, 0, canvas.width, canvas.height);
+  context.restore();
+
+  for (const annotation of annotations) {
+    drawAnnotation(context, annotation);
+  }
+
+  if (draft) {
+    if (draft.type === "crop") {
+      drawCropDraft(context, draft);
+    } else {
+      drawAnnotation(context, draft);
+    }
+  }
+
+  if (selectedId) {
+    const selected = annotations.find((annotation) => annotation.id === selectedId);
+    if (selected) {
+      drawSelection(context, getAnnotationBounds(selected), canResizeAnnotation(selected));
+    }
+  }
+};
+
+export const renderProjectToPngBlob = async (
+  project: ImageEditorProject,
+): Promise<Blob> => {
+  const image = await loadImageElement(project.baseImage.dataUrl);
+  const canvas = document.createElement("canvas");
+  canvas.width = project.width;
+  canvas.height = project.height;
+  renderImageEditorCanvas(canvas, image, project.annotations, undefined, undefined);
+
+  return new Promise((resolve, reject) => {
+    canvas.toBlob((blob) => {
+      if (!blob) {
+        reject(new Error("Unable to render image."));
+        return;
+      }
+
+      resolve(blob);
+    }, "image/png");
+  });
+};
+
+export const getAnnotationBounds = (annotation: ImageAnnotation): Bounds => {
+  switch (annotation.type) {
+    case "arrow":
+      return getArrowBounds(annotation);
+    case "rectangle":
+    case "ellipse":
+    case "pixelate":
+      return expandBounds(
+        normalizeRect(annotation.x, annotation.y, annotation.width, annotation.height),
+        annotation.strokeWidth,
+      );
+    case "pen":
+    case "highlighter":
+      return getPathBounds(annotation);
+    case "text":
+      return getTextBounds(annotation);
+    case "step":
+      return getStepBounds(annotation);
+  }
+};
+
+export const hitTestAnnotation = (
+  annotation: ImageAnnotation,
+  point: Point,
+): boolean => {
+  const bounds = getAnnotationBounds(annotation);
+  return (
+    point.x >= bounds.x &&
+    point.x <= bounds.x + bounds.width &&
+    point.y >= bounds.y &&
+    point.y <= bounds.y + bounds.height
+  );
+};
+
+export const moveAnnotation = (
+  annotation: ImageAnnotation,
+  deltaX: number,
+  deltaY: number,
+): ImageAnnotation => {
+  switch (annotation.type) {
+    case "arrow":
+      return {
+        ...annotation,
+        start: movePoint(annotation.start, deltaX, deltaY),
+        end: movePoint(annotation.end, deltaX, deltaY),
+      };
+    case "rectangle":
+    case "ellipse":
+    case "pixelate":
+      return {
+        ...annotation,
+        x: annotation.x + deltaX,
+        y: annotation.y + deltaY,
+      };
+    case "pen":
+    case "highlighter":
+      return {
+        ...annotation,
+        points: annotation.points.map((point) => movePoint(point, deltaX, deltaY)),
+      };
+    case "text":
+    case "step":
+      return {
+        ...annotation,
+        x: annotation.x + deltaX,
+        y: annotation.y + deltaY,
+      };
+  }
+};
+
+export const canResizeAnnotation = (annotation: ImageAnnotation): boolean =>
+  annotation.type === "rectangle" ||
+  annotation.type === "ellipse" ||
+  annotation.type === "pixelate";
+
+export const getResizeHandleAt = (
+  annotation: ImageAnnotation,
+  point: Point,
+): ResizeHandle | undefined => {
+  if (!canResizeAnnotation(annotation)) {
+    return undefined;
+  }
+
+  const handles = getResizeHandles(getAnnotationBounds(annotation));
+
+  for (const handle of handles) {
+    if (
+      point.x >= handle.bounds.x &&
+      point.x <= handle.bounds.x + handle.bounds.width &&
+      point.y >= handle.bounds.y &&
+      point.y <= handle.bounds.y + handle.bounds.height
+    ) {
+      return handle.handle;
+    }
+  }
+
+  return undefined;
+};
+
+export const resizeAnnotation = (
+  annotation: ImageAnnotation,
+  initialBounds: Bounds,
+  handle: ResizeHandle,
+  point: Point,
+): ImageAnnotation => {
+  if (
+    annotation.type !== "rectangle" &&
+    annotation.type !== "ellipse" &&
+    annotation.type !== "pixelate"
+  ) {
+    return annotation;
+  }
+
+  const fixed = getFixedResizeCorner(initialBounds, handle);
+  const nextBounds = normalizeRect(
+    fixed.x,
+    fixed.y,
+    point.x - fixed.x,
+    point.y - fixed.y,
+  );
+
+  return {
+    ...annotation,
+    x: nextBounds.x,
+    y: nextBounds.y,
+    width: Math.max(4, nextBounds.width),
+    height: Math.max(4, nextBounds.height),
+  };
+};
+
+const drawAnnotation = (
+  context: CanvasRenderingContext2D,
+  annotation: ImageAnnotation,
+) => {
+  switch (annotation.type) {
+    case "arrow":
+      drawArrow(context, annotation);
+      break;
+    case "rectangle":
+      drawBox(context, annotation);
+      break;
+    case "ellipse":
+      drawEllipse(context, annotation);
+      break;
+    case "pixelate":
+      drawPixelate(context, annotation);
+      break;
+    case "pen":
+    case "highlighter":
+      drawPath(context, annotation);
+      break;
+    case "text":
+      drawText(context, annotation);
+      break;
+    case "step":
+      drawStep(context, annotation);
+      break;
+  }
+};
+
+const drawArrow = (
+  context: CanvasRenderingContext2D,
+  annotation: ArrowAnnotation,
+) => {
+  const headLength = Math.max(16, annotation.strokeWidth * 5);
+  const angle = Math.atan2(
+    annotation.end.y - annotation.start.y,
+    annotation.end.x - annotation.start.x,
+  );
+
+  context.save();
+  context.globalAlpha = annotation.opacity;
+  context.strokeStyle = annotation.color;
+  context.fillStyle = annotation.color;
+  context.lineWidth = annotation.strokeWidth;
+  context.lineCap = "round";
+  context.lineJoin = "round";
+  context.beginPath();
+  context.moveTo(annotation.start.x, annotation.start.y);
+  context.lineTo(annotation.end.x, annotation.end.y);
+  context.stroke();
+
+  context.beginPath();
+  context.moveTo(annotation.end.x, annotation.end.y);
+  context.lineTo(
+    annotation.end.x - headLength * Math.cos(angle - Math.PI / 6),
+    annotation.end.y - headLength * Math.sin(angle - Math.PI / 6),
+  );
+  context.lineTo(
+    annotation.end.x - headLength * Math.cos(angle + Math.PI / 6),
+    annotation.end.y - headLength * Math.sin(angle + Math.PI / 6),
+  );
+  context.closePath();
+  context.fill();
+  context.restore();
+};
+
+const drawBox = (
+  context: CanvasRenderingContext2D,
+  annotation: BoxAnnotation,
+) => {
+  const bounds = normalizeRect(
+    annotation.x,
+    annotation.y,
+    annotation.width,
+    annotation.height,
+  );
+
+  context.save();
+  context.globalAlpha = annotation.opacity;
+  context.lineWidth = annotation.strokeWidth;
+  context.strokeStyle = annotation.strokeColor;
+  context.fillStyle = annotation.fillColor;
+  context.beginPath();
+  context.rect(bounds.x, bounds.y, bounds.width, bounds.height);
+  context.fill();
+  context.stroke();
+  context.restore();
+};
+
+const drawEllipse = (
+  context: CanvasRenderingContext2D,
+  annotation: BoxAnnotation,
+) => {
+  const bounds = normalizeRect(
+    annotation.x,
+    annotation.y,
+    annotation.width,
+    annotation.height,
+  );
+
+  context.save();
+  context.globalAlpha = annotation.opacity;
+  context.lineWidth = annotation.strokeWidth;
+  context.strokeStyle = annotation.strokeColor;
+  context.fillStyle = annotation.fillColor;
+  context.beginPath();
+  context.ellipse(
+    bounds.x + bounds.width / 2,
+    bounds.y + bounds.height / 2,
+    bounds.width / 2,
+    bounds.height / 2,
+    0,
+    0,
+    Math.PI * 2,
+  );
+  context.fill();
+  context.stroke();
+  context.restore();
+};
+
+const drawPixelate = (
+  context: CanvasRenderingContext2D,
+  annotation: BoxAnnotation,
+) => {
+  const bounds = normalizeRect(
+    annotation.x,
+    annotation.y,
+    annotation.width,
+    annotation.height,
+  );
+
+  if (bounds.width < 2 || bounds.height < 2) {
+    return;
+  }
+
+  const pixelSize = Math.max(8, annotation.strokeWidth * 4);
+  const tinyWidth = Math.max(1, Math.ceil(bounds.width / pixelSize));
+  const tinyHeight = Math.max(1, Math.ceil(bounds.height / pixelSize));
+  const tempCanvas = document.createElement("canvas");
+  tempCanvas.width = tinyWidth;
+  tempCanvas.height = tinyHeight;
+  const tempContext = tempCanvas.getContext("2d");
+
+  if (!tempContext) {
+    return;
+  }
+
+  tempContext.imageSmoothingEnabled = true;
+  tempContext.drawImage(
+    context.canvas,
+    bounds.x,
+    bounds.y,
+    bounds.width,
+    bounds.height,
+    0,
+    0,
+    tinyWidth,
+    tinyHeight,
+  );
+
+  context.save();
+  context.imageSmoothingEnabled = false;
+  context.drawImage(
+    tempCanvas,
+    0,
+    0,
+    tinyWidth,
+    tinyHeight,
+    bounds.x,
+    bounds.y,
+    bounds.width,
+    bounds.height,
+  );
+  context.globalAlpha = 0.82;
+  context.lineWidth = Math.max(2, annotation.strokeWidth / 2);
+  context.strokeStyle = annotation.strokeColor;
+  context.strokeRect(bounds.x, bounds.y, bounds.width, bounds.height);
+  context.restore();
+};
+
+const drawPath = (
+  context: CanvasRenderingContext2D,
+  annotation: PathAnnotation,
+) => {
+  if (annotation.points.length < 2) {
+    return;
+  }
+
+  context.save();
+  context.globalAlpha =
+    annotation.type === "highlighter" ? Math.min(annotation.opacity, 0.42) : annotation.opacity;
+  context.globalCompositeOperation =
+    annotation.type === "highlighter" ? "multiply" : "source-over";
+  context.strokeStyle = annotation.color;
+  context.lineWidth = annotation.strokeWidth;
+  context.lineCap = "round";
+  context.lineJoin = "round";
+  context.beginPath();
+  context.moveTo(annotation.points[0]?.x ?? 0, annotation.points[0]?.y ?? 0);
+
+  for (const point of annotation.points.slice(1)) {
+    context.lineTo(point.x, point.y);
+  }
+
+  context.stroke();
+  context.restore();
+};
+
+const drawText = (
+  context: CanvasRenderingContext2D,
+  annotation: TextAnnotation,
+) => {
+  const paddingX = Math.max(8, annotation.fontSize * 0.32);
+  const paddingY = Math.max(5, annotation.fontSize * 0.22);
+
+  context.save();
+  context.globalAlpha = annotation.opacity;
+  context.font = `700 ${annotation.fontSize}px ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
+  context.textBaseline = "top";
+  const metrics = context.measureText(annotation.text);
+  const width = metrics.width + paddingX * 2;
+  const height = annotation.fontSize * 1.28 + paddingY * 2;
+
+  context.fillStyle = annotation.backgroundColor;
+  drawRoundRect(context, annotation.x, annotation.y, width, height, 8);
+  context.fill();
+  context.fillStyle = annotation.color;
+  context.fillText(annotation.text, annotation.x + paddingX, annotation.y + paddingY);
+  context.restore();
+};
+
+const drawStep = (
+  context: CanvasRenderingContext2D,
+  annotation: StepAnnotation,
+) => {
+  const radius = annotation.size / 2;
+
+  context.save();
+  context.globalAlpha = annotation.opacity;
+  context.fillStyle = annotation.color;
+  context.strokeStyle = "rgba(255, 255, 255, 0.92)";
+  context.lineWidth = Math.max(2, annotation.size * 0.08);
+  context.beginPath();
+  context.arc(annotation.x, annotation.y, radius, 0, Math.PI * 2);
+  context.fill();
+  context.stroke();
+  context.fillStyle = "#ffffff";
+  context.font = `800 ${Math.round(annotation.size * 0.46)}px ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
+  context.textAlign = "center";
+  context.textBaseline = "middle";
+  context.fillText(annotation.label, annotation.x, annotation.y + 1);
+  context.restore();
+};
+
+const drawCropDraft = (
+  context: CanvasRenderingContext2D,
+  draft: CropDraft,
+) => {
+  const bounds = normalizeRect(draft.x, draft.y, draft.width, draft.height);
+
+  context.save();
+  context.fillStyle = "rgba(0, 0, 0, 0.45)";
+  context.fillRect(0, 0, context.canvas.width, context.canvas.height);
+  context.clearRect(bounds.x, bounds.y, bounds.width, bounds.height);
+  context.strokeStyle = "#ffffff";
+  context.lineWidth = 2;
+  context.setLineDash([8, 8]);
+  context.strokeRect(bounds.x, bounds.y, bounds.width, bounds.height);
+  context.restore();
+};
+
+const drawSelection = (
+  context: CanvasRenderingContext2D,
+  bounds: Bounds,
+  showHandles: boolean,
+) => {
+  context.save();
+  context.strokeStyle = selectionColor;
+  context.lineWidth = 2;
+  context.setLineDash([6, 4]);
+  context.strokeRect(bounds.x - 4, bounds.y - 4, bounds.width + 8, bounds.height + 8);
+
+  if (showHandles) {
+    context.setLineDash([]);
+    context.fillStyle = "#ffffff";
+    context.strokeStyle = selectionColor;
+    context.lineWidth = 2;
+
+    for (const handle of getResizeHandles(bounds)) {
+      context.beginPath();
+      context.rect(
+        handle.bounds.x,
+        handle.bounds.y,
+        handle.bounds.width,
+        handle.bounds.height,
+      );
+      context.fill();
+      context.stroke();
+    }
+  }
+
+  context.restore();
+};
+
+const getResizeHandles = (bounds: Bounds) => {
+  const size = resizeHandleSize;
+  const half = size / 2;
+
+  return [
+    {
+      handle: "nw" as const,
+      bounds: { x: bounds.x - half, y: bounds.y - half, width: size, height: size },
+    },
+    {
+      handle: "ne" as const,
+      bounds: {
+        x: bounds.x + bounds.width - half,
+        y: bounds.y - half,
+        width: size,
+        height: size,
+      },
+    },
+    {
+      handle: "sw" as const,
+      bounds: {
+        x: bounds.x - half,
+        y: bounds.y + bounds.height - half,
+        width: size,
+        height: size,
+      },
+    },
+    {
+      handle: "se" as const,
+      bounds: {
+        x: bounds.x + bounds.width - half,
+        y: bounds.y + bounds.height - half,
+        width: size,
+        height: size,
+      },
+    },
+  ];
+};
+
+const getFixedResizeCorner = (bounds: Bounds, handle: ResizeHandle): Point => {
+  switch (handle) {
+    case "nw":
+      return { x: bounds.x + bounds.width, y: bounds.y + bounds.height };
+    case "ne":
+      return { x: bounds.x, y: bounds.y + bounds.height };
+    case "sw":
+      return { x: bounds.x + bounds.width, y: bounds.y };
+    case "se":
+      return { x: bounds.x, y: bounds.y };
+  }
+};
+
+const drawRoundRect = (
+  context: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  radius: number,
+) => {
+  const safeRadius = Math.min(radius, width / 2, height / 2);
+
+  context.beginPath();
+  context.moveTo(x + safeRadius, y);
+  context.lineTo(x + width - safeRadius, y);
+  context.quadraticCurveTo(x + width, y, x + width, y + safeRadius);
+  context.lineTo(x + width, y + height - safeRadius);
+  context.quadraticCurveTo(x + width, y + height, x + width - safeRadius, y + height);
+  context.lineTo(x + safeRadius, y + height);
+  context.quadraticCurveTo(x, y + height, x, y + height - safeRadius);
+  context.lineTo(x, y + safeRadius);
+  context.quadraticCurveTo(x, y, x + safeRadius, y);
+  context.closePath();
+};
+
+const getArrowBounds = (annotation: ArrowAnnotation): Bounds => {
+  const padding = Math.max(16, annotation.strokeWidth * 4);
+  const minX = Math.min(annotation.start.x, annotation.end.x) - padding;
+  const minY = Math.min(annotation.start.y, annotation.end.y) - padding;
+  const maxX = Math.max(annotation.start.x, annotation.end.x) + padding;
+  const maxY = Math.max(annotation.start.y, annotation.end.y) + padding;
+
+  return {
+    x: minX,
+    y: minY,
+    width: maxX - minX,
+    height: maxY - minY,
+  };
+};
+
+const getPathBounds = (annotation: PathAnnotation): Bounds => {
+  const first = annotation.points[0] ?? { x: 0, y: 0 };
+  let minX = first.x;
+  let minY = first.y;
+  let maxX = first.x;
+  let maxY = first.y;
+
+  for (const point of annotation.points) {
+    minX = Math.min(minX, point.x);
+    minY = Math.min(minY, point.y);
+    maxX = Math.max(maxX, point.x);
+    maxY = Math.max(maxY, point.y);
+  }
+
+  return expandBounds(
+    {
+      x: minX,
+      y: minY,
+      width: maxX - minX,
+      height: maxY - minY,
+    },
+    annotation.strokeWidth + 8,
+  );
+};
+
+const getTextBounds = (annotation: TextAnnotation): Bounds => {
+  const paddingX = Math.max(8, annotation.fontSize * 0.32);
+  const paddingY = Math.max(5, annotation.fontSize * 0.22);
+  const width = annotation.text.length * annotation.fontSize * 0.62 + paddingX * 2;
+  const height = annotation.fontSize * 1.28 + paddingY * 2;
+
+  return {
+    x: annotation.x,
+    y: annotation.y,
+    width,
+    height,
+  };
+};
+
+const getStepBounds = (annotation: StepAnnotation): Bounds => ({
+  x: annotation.x - annotation.size / 2,
+  y: annotation.y - annotation.size / 2,
+  width: annotation.size,
+  height: annotation.size,
+});
+
+const expandBounds = (bounds: Bounds, amount: number): Bounds => ({
+  x: bounds.x - amount,
+  y: bounds.y - amount,
+  width: bounds.width + amount * 2,
+  height: bounds.height + amount * 2,
+});
+
+const movePoint = (point: Point, deltaX: number, deltaY: number): Point => ({
+  x: point.x + deltaX,
+  y: point.y + deltaY,
+});
