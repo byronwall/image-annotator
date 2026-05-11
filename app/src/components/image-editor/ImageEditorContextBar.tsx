@@ -38,6 +38,7 @@ const fillSwatches = [
 
 const strokeWidthSteps = [2, 4, 8, 12] as const;
 const fontSizeSteps = [20, 28, 36, 48] as const;
+const opacitySteps = [0.25, 0.5, 0.75, 1] as const;
 
 export type ImageEditorContextBarProps = {
   style: JSX.CSSProperties;
@@ -56,7 +57,9 @@ export const ImageEditorContextBar = (props: ImageEditorContextBarProps) => {
   const hasSelection = () => props.selectedAnnotation !== undefined;
   const title = () =>
     props.selectedAnnotation
-      ? toolLabels[props.selectedAnnotation.type]
+      ? props.selectedAnnotation.type === "image"
+        ? "Image"
+        : toolLabels[props.selectedAnnotation.type]
       : `${toolLabels[props.activeTool]} style`;
   const usesFill = () =>
     props.activeTool === "rectangle" ||
@@ -272,6 +275,24 @@ export const ImageEditorContextBar = (props: ImageEditorContextBarProps) => {
             )}
           </For>
         </Show>
+      </HStack>
+
+      <HStack gap="1" flexWrap="wrap">
+        <Box textStyle="xs" color="fg.muted" mr="1">
+          Opacity
+        </Box>
+        <For each={opacitySteps}>
+          {(value) => (
+            <Button
+              size="2xs"
+              variant={props.settings.opacity === value ? "solid" : "surface"}
+              colorPalette={props.settings.opacity === value ? "blue" : "gray"}
+              onClick={() => props.onSettingsChange({ opacity: value })}
+            >
+              {Math.round(value * 100)}
+            </Button>
+          )}
+        </For>
       </HStack>
     </VStack>
   );

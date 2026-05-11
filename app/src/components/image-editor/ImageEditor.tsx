@@ -23,7 +23,7 @@ import {
   type Bounds,
 } from "./image-editor.render";
 import { ImageEditorCanvas } from "./ImageEditorCanvas";
-import { ImageEditorHistory } from "./ImageEditorHistory";
+import { ImageEditorSidebar } from "./ImageEditorSidebar";
 import { ImageEditorToolbar } from "./ImageEditorToolbar";
 import {
   appendPngDataToBlob,
@@ -59,6 +59,7 @@ type MoveInteraction = {
   annotationId: string;
   start: Point;
   originalAnnotations: ImageAnnotation[];
+  commitLabel?: string;
 };
 
 type ResizeInteraction = {
@@ -96,6 +97,8 @@ export const ImageEditor = () => {
   const [inlineEditOriginalAnnotations, setInlineEditOriginalAnnotations] =
     createSignal<ImageAnnotation[]>();
   const [hasPendingInlineEdit, setHasPendingInlineEdit] = createSignal(false);
+  const [isShortcutsOpen, setIsShortcutsOpen] = createSignal(false);
+  let keyboardNudgeTimer: number | undefined;
 
   const selectedAnnotation = createMemo(() =>
     project()?.annotations.find((annotation) => annotation.id === selectedId()),
@@ -115,7 +118,7 @@ export const ImageEditor = () => {
     const annotation = inlineEditingAnnotation();
     const tool = activeTool();
 
-    if (!annotation || (tool !== "select" && tool !== annotation.type)) {
+    if (!annotation || annotation.hidden || (tool !== "select" && tool !== annotation.type)) {
       return undefined;
     }
 
@@ -161,22 +164,51 @@ export const ImageEditor = () => {
       }
 
       event.preventDefault();
-      void importFiles(files, "Pasted image");
+      void handlePastedImage(files[0]);
     };
 
     window.addEventListener("paste", handlePaste);
     window.addEventListener("keydown", handleKeyboardShortcut);
 
     onCleanup(() => {
+      clearKeyboardNudgeTimer();
       window.removeEventListener("paste", handlePaste);
       window.removeEventListener("keydown", handleKeyboardShortcut);
     });
   });
 
+  const clearKeyboardNudgeTimer = () => {
+    if (keyboardNudgeTimer === undefined) {
+      return;
+    }
+
+    window.clearTimeout(keyboardNudgeTimer);
+    keyboardNudgeTimer = undefined;
+  };
+
+  const commitPendingKeyboardNudge = () => {
+    if (keyboardNudgeTimer === undefined) {
+      return;
+    }
+
+    clearKeyboardNudgeTimer();
+    commitCurrentProject("Nudged layer");
+  };
+
+  const scheduleKeyboardNudgeCommit = () => {
+    clearKeyboardNudgeTimer();
+    keyboardNudgeTimer = window.setTimeout(() => {
+      keyboardNudgeTimer = undefined;
+      commitCurrentProject("Nudged layer");
+    }, 350);
+  };
+
   const commitProject = (nextProject: ImageEditorProject, label: string) => {
+    clearKeyboardNudgeTimer();
     const timestamp = Date.now();
+    const expandedProject = expandProjectToAnnotations(nextProject);
     const snapshot = cloneProject({
-      ...nextProject,
+      ...expandedProject,
       updatedAt: timestamp,
     });
     const currentIndex = historyIndex();
@@ -215,6 +247,7 @@ export const ImageEditor = () => {
       return;
     }
 
+    clearKeyboardNudgeTimer();
     batch(() => {
       setDraft(undefined);
       setInteraction(undefined);
@@ -394,6 +427,33 @@ export const ImageEditor = () => {
       setInlineEditingId(undefined);
 
       if (hit) {
+        if (event.altKey) {
+          const duplicate = {
+            ...structuredClone(hit),
+            id: createEditorId("layer"),
+            createdAt: Date.now(),
+            hidden: false,
+          };
+          const nextAnnotations = [...currentProject.annotations, duplicate];
+
+          batch(() => {
+            setProject({
+              ...currentProject,
+              annotations: nextAnnotations,
+              updatedAt: Date.now(),
+            });
+            setSelectedId(duplicate.id);
+            setInteraction({
+              type: "move",
+              annotationId: duplicate.id,
+              start: point,
+              originalAnnotations: structuredClone(nextAnnotations),
+              commitLabel: "Duplicated layer",
+            });
+          });
+          return;
+        }
+
         setInteraction({
           type: "move",
           annotationId: hit.id,
@@ -415,7 +475,6 @@ export const ImageEditor = () => {
         "Added text",
       );
       setSelectedId(annotation.id);
-      startInlineEditFor(annotation.id);
       return;
     }
 
@@ -433,7 +492,6 @@ export const ImageEditor = () => {
         "Added step marker",
       );
       setSelectedId(annotation.id);
-      startInlineEditFor(annotation.id);
       return;
     }
 
@@ -498,7 +556,12 @@ export const ImageEditor = () => {
       return;
     }
 
-    setDraft(updateDraft(currentDraft, currentInteraction.start, point));
+    setDraft(
+      updateDraft(currentDraft, currentInteraction.start, point, {
+        centerFromStart: event.altKey,
+        constrain: event.shiftKey,
+      }),
+    );
   };
 
   const handlePointerUp = (point: Point, event: PointerEvent) => {
@@ -541,7 +604,7 @@ export const ImageEditor = () => {
         ...currentProject,
         annotations: [...currentProject.annotations, currentDraft],
       },
-      `Added ${toolLabels[currentDraft.type]}`,
+      `Added ${annotationTypeLabel(currentDraft)}`,
     );
     setSelectedId(currentDraft.id);
   };
@@ -560,14 +623,20 @@ export const ImageEditor = () => {
     }
 
     if (movedDistance < 1.5) {
-      setProject({
+      const nextProject = {
         ...currentProject,
         annotations: currentInteraction.originalAnnotations,
-      });
+      };
+
+      if (currentInteraction.commitLabel) {
+        commitProject(nextProject, currentInteraction.commitLabel);
+      } else {
+        setProject(nextProject);
+      }
       return;
     }
 
-    commitProject(currentProject, "Moved layer");
+    commitProject(currentProject, currentInteraction.commitLabel ?? "Moved layer");
   };
 
   const finishResizeInteraction = (
@@ -714,6 +783,7 @@ export const ImageEditor = () => {
   };
 
   const buildPngBlob = async () => {
+    commitPendingKeyboardNudge();
     const currentProject = project();
 
     if (!currentProject) {
@@ -771,6 +841,16 @@ export const ImageEditor = () => {
 
   const fitZoom = () => {
     handleZoomChange("fit");
+  };
+
+  const undoHistory = () => {
+    commitPendingKeyboardNudge();
+    restoreHistoryEntry(historyIndex() - 1);
+  };
+
+  const redoHistory = () => {
+    commitPendingKeyboardNudge();
+    restoreHistoryEntry(historyIndex() + 1);
   };
 
   const handleSettingsChange = (patch: Partial<EditorSettings>) => {
@@ -874,8 +954,15 @@ export const ImageEditor = () => {
   };
 
   const deleteSelected = () => {
-    const currentProject = project();
     const id = selectedId();
+
+    if (id) {
+      deleteLayer(id);
+    }
+  };
+
+  const deleteLayer = (id: string) => {
+    const currentProject = project();
 
     if (!currentProject || !id) {
       return;
@@ -893,8 +980,19 @@ export const ImageEditor = () => {
   };
 
   const duplicateSelected = () => {
+    const id = selectedId();
+
+    if (id) {
+      duplicateLayer(id);
+      return;
+    }
+
+    setStatus("Select a layer to duplicate.");
+  };
+
+  const duplicateLayer = (id: string) => {
     const currentProject = project();
-    const annotation = selectedAnnotation();
+    const annotation = currentProject?.annotations.find((candidate) => candidate.id === id);
 
     if (!currentProject || !annotation) {
       setStatus("Select a layer to duplicate.");
@@ -906,6 +1004,7 @@ export const ImageEditor = () => {
         ...structuredClone(annotation),
         id: createEditorId("layer"),
         createdAt: Date.now(),
+        hidden: false,
       },
       16,
       16,
@@ -976,6 +1075,7 @@ export const ImageEditor = () => {
         ...structuredClone(copiedAnnotation),
         id: createEditorId("layer"),
         createdAt: Date.now(),
+        hidden: false,
       },
       24,
       24,
@@ -994,17 +1094,79 @@ export const ImageEditor = () => {
     return true;
   };
 
+  const handlePastedImage = async (file: File | undefined) => {
+    if (!file) {
+      return;
+    }
+
+    const currentProject = project();
+
+    if (!currentProject) {
+      void importFiles([file], "Pasted image");
+      return;
+    }
+
+    try {
+      const dataUrl = await readFileAsDataUrl(file);
+      const image = await loadImageElement(dataUrl);
+      const maxWidth = Math.max(80, currentProject.width * 0.45);
+      const maxHeight = Math.max(80, currentProject.height * 0.45);
+      const scale = Math.min(1, maxWidth / image.naturalWidth, maxHeight / image.naturalHeight);
+      const width = Math.max(24, Math.round(image.naturalWidth * scale));
+      const height = Math.max(24, Math.round(image.naturalHeight * scale));
+      const annotation: ImageAnnotation = {
+        id: createEditorId("layer"),
+        type: "image",
+        createdAt: Date.now(),
+        opacity: 1,
+        x: Math.round((currentProject.width - width) / 2),
+        y: Math.round((currentProject.height - height) / 2),
+        width,
+        height,
+        dataUrl,
+        naturalWidth: image.naturalWidth,
+        naturalHeight: image.naturalHeight,
+      };
+
+      commitProject(
+        {
+          ...currentProject,
+          annotations: [...currentProject.annotations, annotation],
+        },
+        "Pasted image layer",
+      );
+      setSelectedId(annotation.id);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Unable to paste image.");
+    }
+  };
+
   const bringSelectedForward = () => {
-    reorderSelected(1, "Brought layer forward");
+    const id = selectedId();
+
+    if (id) {
+      bringLayerForward(id);
+    }
   };
 
   const sendSelectedBackward = () => {
-    reorderSelected(-1, "Sent layer backward");
+    const id = selectedId();
+
+    if (id) {
+      sendLayerBackward(id);
+    }
   };
 
-  const reorderSelected = (direction: -1 | 1, label: string) => {
+  const bringLayerForward = (id: string) => {
+    reorderLayer(id, 1, "Brought layer forward");
+  };
+
+  const sendLayerBackward = (id: string) => {
+    reorderLayer(id, -1, "Sent layer backward");
+  };
+
+  const reorderLayer = (id: string, direction: -1 | 1, label: string) => {
     const currentProject = project();
-    const id = selectedId();
 
     if (!currentProject || !id) {
       return;
@@ -1037,6 +1199,52 @@ export const ImageEditor = () => {
     setStatus(label);
   };
 
+  const selectLayer = (id: string) => {
+    const annotation = project()?.annotations.find((candidate) => candidate.id === id);
+
+    if (!annotation) {
+      return;
+    }
+
+    batch(() => {
+      setSelectedId(id);
+      setInlineEditingId(undefined);
+      setActiveTool("select");
+    });
+    setStatus(
+      annotation.hidden
+        ? `Selected hidden ${annotationTypeLabel(annotation)} layer.`
+        : `Selected ${annotationTypeLabel(annotation)} layer.`,
+    );
+  };
+
+  const toggleLayerVisibility = (id: string) => {
+    const currentProject = project();
+    const annotation = currentProject?.annotations.find((candidate) => candidate.id === id);
+
+    if (!currentProject || !annotation) {
+      return;
+    }
+
+    const nextHidden = !annotation.hidden;
+    commitProject(
+      {
+        ...currentProject,
+        annotations: currentProject.annotations.map((candidate) =>
+          candidate.id === id ? { ...candidate, hidden: nextHidden } : candidate,
+        ),
+      },
+      nextHidden ? "Hid layer" : "Showed layer",
+    );
+
+    if (nextHidden && selectedId() === id) {
+      batch(() => {
+        setSelectedId(undefined);
+        setInlineEditingId(undefined);
+      });
+    }
+  };
+
   const handleDoubleClick = (point: Point) => {
     const currentProject = project();
 
@@ -1059,16 +1267,16 @@ export const ImageEditor = () => {
       return;
     }
 
-    commitProject(
-      {
-        ...currentProject,
-        annotations: currentProject.annotations.map((annotation) =>
-          annotation.id === id ? moveAnnotation(annotation, deltaX, deltaY) : annotation,
-        ),
-      },
-      "Nudged layer",
-    );
+    setProject({
+      ...currentProject,
+      annotations: currentProject.annotations.map((annotation) =>
+        annotation.id === id ? moveAnnotation(annotation, deltaX, deltaY) : annotation,
+      ),
+      updatedAt: Date.now(),
+    });
     setSelectedId(id);
+    scheduleKeyboardNudgeCommit();
+    setStatus(`Nudged layer ${eventNudgeLabel(deltaX, deltaY)}.`);
   };
 
   const cycleSelectedLayer = (direction: -1 | 1) => {
@@ -1078,7 +1286,15 @@ export const ImageEditor = () => {
       return;
     }
 
-    const annotations = currentProject.annotations;
+    const annotations = currentProject.annotations.filter(
+      (annotation) => !annotation.hidden,
+    );
+
+    if (annotations.length === 0) {
+      setStatus("No visible layers to select.");
+      return;
+    }
+
     const selectedIndex = annotations.findIndex(
       (annotation) => annotation.id === selectedId(),
     );
@@ -1096,7 +1312,7 @@ export const ImageEditor = () => {
       setInlineEditingId(undefined);
       setActiveTool("select");
     });
-    setStatus(`Selected ${toolLabels[nextAnnotation.type]} layer.`);
+    setStatus(`Selected ${annotationTypeLabel(nextAnnotation)} layer.`);
   };
 
   const adjustStrokeWidth = (delta: number) => {
@@ -1115,6 +1331,7 @@ export const ImageEditor = () => {
 
     if (isPrimaryModifier && key === "z") {
       event.preventDefault();
+      commitPendingKeyboardNudge();
 
       if (event.shiftKey) {
         restoreHistoryEntry(historyIndex() + 1);
@@ -1126,6 +1343,7 @@ export const ImageEditor = () => {
 
     if (isPrimaryModifier && key === "y") {
       event.preventDefault();
+      commitPendingKeyboardNudge();
       restoreHistoryEntry(historyIndex() + 1);
       return;
     }
@@ -1210,6 +1428,10 @@ export const ImageEditor = () => {
 
     if (event.key === "Escape") {
       event.preventDefault();
+      if (isShortcutsOpen()) {
+        setIsShortcutsOpen(false);
+        return;
+      }
       batch(() => {
         setDraft(undefined);
         setInteraction(undefined);
@@ -1217,6 +1439,12 @@ export const ImageEditor = () => {
         setSelectedId(undefined);
         setActiveTool("select");
       });
+      return;
+    }
+
+    if (!isPrimaryModifier && event.shiftKey && key === "?") {
+      event.preventDefault();
+      setIsShortcutsOpen((value) => !value);
       return;
     }
 
@@ -1310,25 +1538,37 @@ export const ImageEditor = () => {
         onToolChange={handleToolChange}
         onToggleHistory={() => setIsHistoryOpen((value) => !value)}
         onChooseFile={chooseFile}
-        onUndo={() => restoreHistoryEntry(historyIndex() - 1)}
-        onRedo={() => restoreHistoryEntry(historyIndex() + 1)}
+        onUndo={undoHistory}
+        onRedo={redoHistory}
         onZoomIn={zoomIn}
         onZoomOut={zoomOut}
         onZoomFit={fitZoom}
         onZoomReset={resetZoom}
         onExport={handleExport}
         onCopy={handleCopy}
+        onShowShortcuts={() => setIsShortcutsOpen(true)}
       />
 
       <Flex
-        minH={{ base: "auto", xl: "calc(100dvh - 64px)" }}
-        direction={{ base: "column", xl: "row" }}
+        minH={{ base: "auto", lg: "calc(100dvh - 57px)" }}
+        direction={{ base: "column", lg: "row" }}
       >
         <Show when={isHistoryOpen()}>
-          <ImageEditorHistory
-            entries={history()}
-            activeIndex={historyIndex()}
-            onJump={restoreHistoryEntry}
+          <ImageEditorSidebar
+            annotations={project()?.annotations ?? []}
+            selectedId={selectedId()}
+            historyEntries={history()}
+            activeHistoryIndex={historyIndex()}
+            onSelectLayer={selectLayer}
+            onToggleLayerVisibility={toggleLayerVisibility}
+            onDuplicateLayer={duplicateLayer}
+            onBringLayerForward={bringLayerForward}
+            onSendLayerBackward={sendLayerBackward}
+            onDeleteLayer={deleteLayer}
+            onJumpHistory={(index) => {
+              commitPendingKeyboardNudge();
+              restoreHistoryEntry(index);
+            }}
           />
         </Show>
         <ImageEditorCanvas
@@ -1387,9 +1627,56 @@ export const ImageEditor = () => {
         </Badge>
         <Box>{status()}</Box>
       </HStack>
+
+      <Show when={isShortcutsOpen()}>
+        <Box
+          position="fixed"
+          inset="0"
+          zIndex="modal"
+          bg="rgba(15, 23, 42, 0.36)"
+          onClick={() => setIsShortcutsOpen(false)}
+        >
+          <Box
+            role="dialog"
+            aria-modal="true"
+            aria-label="Keyboard shortcuts"
+            position="absolute"
+            left="50%"
+            top="50%"
+            transform="translate(-50%, -50%)"
+            width="min(520px, calc(100vw - 32px))"
+            p="5"
+            borderRadius="l2"
+            borderWidth="1px"
+            borderColor="border"
+            bg="bg.default"
+            boxShadow="xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <Box fontWeight="semibold" mb="3">Keyboard shortcuts</Box>
+            <Flex gap="2" direction="column" textStyle="sm">
+              <ShortcutRow keys="V A R O P H T S X C" label="Choose tools" />
+              <ShortcutRow keys="+ / -" label="Zoom in or out" />
+              <ShortcutRow keys="Mouse wheel" label="Zoom around cursor" />
+              <ShortcutRow keys="Middle drag / Space drag" label="Pan viewport" />
+              <ShortcutRow keys="Enter / double click" label="Edit selected text or step" />
+              <ShortcutRow keys="Arrow keys" label="Nudge selected layer" />
+              <ShortcutRow keys="Cmd/Ctrl C, X, V, D" label="Copy, cut, paste, duplicate layers" />
+              <ShortcutRow keys="Cmd/Ctrl Z / Shift Z" label="Undo or redo" />
+            </Flex>
+          </Box>
+        </Box>
+      </Show>
     </Box>
   );
 };
+
+const ShortcutRow = (props: { keys: string; label: string }) => (
+  <HStack justifyContent="space-between" gap="4">
+    <Box color="fg.muted">{props.label}</Box>
+    <Badge variant="subtle" colorPalette="gray">{props.keys}</Badge>
+  </HStack>
+);
 
 const createDraftAnnotation = (
   tool: ImageEditorTool,
@@ -1458,18 +1745,28 @@ const updateDraft = (
   draft: EditorDraft,
   start: Point,
   point: Point,
+  options: { centerFromStart: boolean; constrain: boolean },
 ): EditorDraft => {
   switch (draft.type) {
     case "arrow":
-      return { ...draft, end: point };
+      return {
+        ...draft,
+        end: options.constrain ? constrainPointTo45Degrees(start, point) : point,
+      };
     case "rectangle":
     case "ellipse":
     case "pixelate":
+    case "crop": {
+      const bounds = getGestureRect(start, point, options);
+
       return {
         ...draft,
-        width: point.x - start.x,
-        height: point.y - start.y,
+        x: bounds.x,
+        y: bounds.y,
+        width: bounds.width,
+        height: bounds.height,
       };
+    }
     case "pen":
     case "highlighter":
       if (distance(draft.points[draft.points.length - 1] ?? start, point) < 1.5) {
@@ -1480,14 +1777,9 @@ const updateDraft = (
         ...draft,
         points: [...draft.points, point],
       };
-    case "crop":
-      return {
-        ...draft,
-        width: point.x - start.x,
-        height: point.y - start.y,
-      };
     case "text":
     case "step":
+    case "image":
       return draft;
   }
 };
@@ -1545,6 +1837,7 @@ const isUsableDraft = (draft: EditorDraft) => {
       return draft.points.length >= 2;
     case "text":
     case "step":
+    case "image":
       return true;
   }
 };
@@ -1562,6 +1855,40 @@ const findHitAnnotation = (
   }
 
   return undefined;
+};
+
+const annotationTypeLabel = (annotation: ImageAnnotation | EditorDraft) =>
+  annotation.type === "crop"
+    ? toolLabels.crop
+    : annotation.type === "image"
+      ? "Image"
+      : toolLabels[annotation.type];
+
+const expandProjectToAnnotations = (
+  project: ImageEditorProject,
+): ImageEditorProject => {
+  const padding = 24;
+  const maxBounds = project.annotations.reduce(
+    (bounds, annotation) => {
+      const annotationBounds = getAnnotationBounds(annotation);
+
+      return {
+        width: Math.max(bounds.width, Math.ceil(annotationBounds.x + annotationBounds.width + padding)),
+        height: Math.max(bounds.height, Math.ceil(annotationBounds.y + annotationBounds.height + padding)),
+      };
+    },
+    { width: project.width, height: project.height },
+  );
+
+  if (maxBounds.width === project.width && maxBounds.height === project.height) {
+    return project;
+  }
+
+  return {
+    ...project,
+    width: maxBounds.width,
+    height: maxBounds.height,
+  };
 };
 
 const applySettingsToAnnotation = (
@@ -1610,6 +1937,11 @@ const applySettingsToAnnotation = (
         ...annotation,
         color: settings.color,
         size: Math.max(28, settings.fontSize * 1.35),
+        opacity: settings.opacity,
+      };
+    case "image":
+      return {
+        ...annotation,
         opacity: settings.opacity,
       };
   }
@@ -1664,6 +1996,11 @@ const settingsFromAnnotation = (
         ...fallback,
         color: annotation.color,
         fontSize: Math.round(annotation.size / 1.35),
+        opacity: annotation.opacity,
+      };
+    case "image":
+      return {
+        ...fallback,
         opacity: annotation.opacity,
       };
   }
@@ -1730,6 +2067,66 @@ const clampZoom = (zoom: number) => Math.max(0.1, Math.min(5, zoom));
 const numericZoom = (zoom: ImageEditorZoom) => (zoom === "fit" ? 1 : zoom);
 
 const formatZoom = (zoom: number) => `${Math.round(zoom * 100)}%`;
+
+const eventNudgeLabel = (deltaX: number, deltaY: number) => {
+  if (deltaX < 0) {
+    return "left";
+  }
+
+  if (deltaX > 0) {
+    return "right";
+  }
+
+  if (deltaY < 0) {
+    return "up";
+  }
+
+  return "down";
+};
+
+const constrainPointTo45Degrees = (start: Point, point: Point): Point => {
+  const deltaX = point.x - start.x;
+  const deltaY = point.y - start.y;
+  const angle = Math.atan2(deltaY, deltaX);
+  const distanceFromStart = Math.hypot(deltaX, deltaY);
+  const snappedAngle = Math.round(angle / (Math.PI / 4)) * (Math.PI / 4);
+
+  return {
+    x: start.x + Math.cos(snappedAngle) * distanceFromStart,
+    y: start.y + Math.sin(snappedAngle) * distanceFromStart,
+  };
+};
+
+const getGestureRect = (
+  start: Point,
+  point: Point,
+  options: { centerFromStart: boolean; constrain: boolean },
+) => {
+  let deltaX = point.x - start.x;
+  let deltaY = point.y - start.y;
+
+  if (options.constrain) {
+    const size = Math.max(Math.abs(deltaX), Math.abs(deltaY));
+    deltaX = Math.sign(deltaX || 1) * size;
+    deltaY = Math.sign(deltaY || 1) * size;
+  }
+
+  if (options.centerFromStart) {
+    return {
+      x: start.x - deltaX,
+      y: start.y - deltaY,
+      width: deltaX * 2,
+      height: deltaY * 2,
+    };
+  }
+
+  return {
+    x: start.x,
+    y: start.y,
+    width: deltaX,
+    height: deltaY,
+  };
+};
 
 const downloadBaseName = (name: string) => {
   const withoutExtension = name.replace(/\.[^.]+$/, "");

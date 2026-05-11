@@ -44,6 +44,7 @@ export type BaseAnnotation = {
   id: string;
   createdAt: number;
   opacity: number;
+  hidden?: boolean;
 };
 
 export type ArrowAnnotation = BaseAnnotation & {
@@ -91,12 +92,24 @@ export type StepAnnotation = BaseAnnotation & {
   size: number;
 };
 
+export type ImageLayerAnnotation = BaseAnnotation & {
+  type: "image";
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  dataUrl: string;
+  naturalWidth: number;
+  naturalHeight: number;
+};
+
 export type ImageAnnotation =
   | ArrowAnnotation
   | BoxAnnotation
   | PathAnnotation
   | TextAnnotation
-  | StepAnnotation;
+  | StepAnnotation
+  | ImageLayerAnnotation;
 
 export type CropDraft = {
   id: string;

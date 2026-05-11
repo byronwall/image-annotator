@@ -4,6 +4,7 @@ import {
   type CropDraft,
   type EditorDraft,
   type ImageAnnotation,
+  type ImageLayerAnnotation,
   type ImageEditorProject,
   type PathAnnotation,
   type Point,
@@ -21,6 +22,7 @@ export type Bounds = {
 
 const selectionColor = "#0ea5e9";
 const resizeHandleSize = 12;
+const imageLayerCache = new Map<string, HTMLImageElement>();
 
 export const normalizeRect = (
   x: number,
@@ -75,10 +77,14 @@ export const renderImageEditorCanvas = (
   context.clearRect(0, 0, canvas.width, canvas.height);
   context.save();
   context.imageSmoothingEnabled = true;
-  context.drawImage(baseImage, 0, 0, canvas.width, canvas.height);
+  context.drawImage(baseImage, 0, 0, baseImage.naturalWidth, baseImage.naturalHeight);
   context.restore();
 
   for (const annotation of annotations) {
+    if (annotation.hidden) {
+      continue;
+    }
+
     drawAnnotation(context, annotation);
   }
 
@@ -92,7 +98,7 @@ export const renderImageEditorCanvas = (
 
   if (selectedId) {
     const selected = annotations.find((annotation) => annotation.id === selectedId);
-    if (selected) {
+    if (selected && !selected.hidden) {
       drawSelection(context, getAnnotationBounds(selected), canResizeAnnotation(selected));
     }
   }
@@ -137,6 +143,8 @@ export const getAnnotationBounds = (annotation: ImageAnnotation): Bounds => {
       return getTextBounds(annotation);
     case "step":
       return getStepBounds(annotation);
+    case "image":
+      return normalizeRect(annotation.x, annotation.y, annotation.width, annotation.height);
   }
 };
 
@@ -144,6 +152,10 @@ export const hitTestAnnotation = (
   annotation: ImageAnnotation,
   point: Point,
 ): boolean => {
+  if (annotation.hidden) {
+    return false;
+  }
+
   const bounds = getAnnotationBounds(annotation);
   return (
     point.x >= bounds.x &&
@@ -186,13 +198,20 @@ export const moveAnnotation = (
         x: annotation.x + deltaX,
         y: annotation.y + deltaY,
       };
+    case "image":
+      return {
+        ...annotation,
+        x: annotation.x + deltaX,
+        y: annotation.y + deltaY,
+      };
   }
 };
 
 export const canResizeAnnotation = (annotation: ImageAnnotation): boolean =>
   annotation.type === "rectangle" ||
   annotation.type === "ellipse" ||
-  annotation.type === "pixelate";
+  annotation.type === "pixelate" ||
+  annotation.type === "image";
 
 export const getResizeHandleAt = (
   annotation: ImageAnnotation,
@@ -227,7 +246,8 @@ export const resizeAnnotation = (
   if (
     annotation.type !== "rectangle" &&
     annotation.type !== "ellipse" &&
-    annotation.type !== "pixelate"
+    annotation.type !== "pixelate" &&
+    annotation.type !== "image"
   ) {
     return annotation;
   }
@@ -276,7 +296,38 @@ const drawAnnotation = (
     case "step":
       drawStep(context, annotation);
       break;
+    case "image":
+      drawImageLayer(context, annotation);
+      break;
   }
+};
+
+const drawImageLayer = (
+  context: CanvasRenderingContext2D,
+  annotation: ImageLayerAnnotation,
+) => {
+  let image = imageLayerCache.get(annotation.dataUrl);
+
+  if (!image) {
+    image = new Image();
+    image.onload = () => {
+      context.canvas.dispatchEvent(new CustomEvent("image-layer-load"));
+    };
+    image.src = annotation.dataUrl;
+    imageLayerCache.set(annotation.dataUrl, image);
+  }
+
+  if (!image.complete) {
+    return;
+  }
+
+  const bounds = normalizeRect(annotation.x, annotation.y, annotation.width, annotation.height);
+
+  context.save();
+  context.globalAlpha = annotation.opacity;
+  context.imageSmoothingEnabled = true;
+  context.drawImage(image, bounds.x, bounds.y, bounds.width, bounds.height);
+  context.restore();
 };
 
 const drawArrow = (
@@ -464,20 +515,31 @@ const drawText = (
 ) => {
   const paddingX = Math.max(8, annotation.fontSize * 0.32);
   const paddingY = Math.max(5, annotation.fontSize * 0.22);
+  const lineHeight = annotation.fontSize * 1.28;
+  const lines = getTextLines(annotation.text);
 
   context.save();
   context.globalAlpha = annotation.opacity;
   context.font = `700 ${annotation.fontSize}px ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
   context.textBaseline = "top";
-  const metrics = context.measureText(annotation.text);
-  const width = metrics.width + paddingX * 2;
-  const height = annotation.fontSize * 1.28 + paddingY * 2;
+  const width =
+    Math.max(...lines.map((line) => context.measureText(line).width)) +
+    paddingX * 2;
+  const height = lineHeight * lines.length + paddingY * 2;
 
   context.fillStyle = annotation.backgroundColor;
   drawRoundRect(context, annotation.x, annotation.y, width, height, 8);
   context.fill();
   context.fillStyle = annotation.color;
-  context.fillText(annotation.text, annotation.x + paddingX, annotation.y + paddingY);
+
+  for (let index = 0; index < lines.length; index += 1) {
+    context.fillText(
+      lines[index] ?? "",
+      annotation.x + paddingX,
+      annotation.y + paddingY + index * lineHeight,
+    );
+  }
+
   context.restore();
 };
 
@@ -672,8 +734,10 @@ const getPathBounds = (annotation: PathAnnotation): Bounds => {
 const getTextBounds = (annotation: TextAnnotation): Bounds => {
   const paddingX = Math.max(8, annotation.fontSize * 0.32);
   const paddingY = Math.max(5, annotation.fontSize * 0.22);
-  const width = annotation.text.length * annotation.fontSize * 0.62 + paddingX * 2;
-  const height = annotation.fontSize * 1.28 + paddingY * 2;
+  const lines = getTextLines(annotation.text);
+  const longestLine = Math.max(...lines.map((line) => line.length));
+  const width = longestLine * annotation.fontSize * 0.62 + paddingX * 2;
+  const height = annotation.fontSize * 1.28 * lines.length + paddingY * 2;
 
   return {
     x: annotation.x,
@@ -701,3 +765,8 @@ const movePoint = (point: Point, deltaX: number, deltaY: number): Point => ({
   x: point.x + deltaX,
   y: point.y + deltaY,
 });
+
+const getTextLines = (text: string) => {
+  const lines = text.split(/\r?\n/);
+  return lines.length > 0 ? lines : [""];
+};

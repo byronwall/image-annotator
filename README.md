@@ -1,6 +1,6 @@
-# SolidStart + Park UI (Panda CSS) Starter
+# Image Annotator
 
-Starter repository for SolidStart with Park UI wrappers, Panda theming, and a curated set of developer-focused assets reconciled from `visual-notes`.
+Production SolidStart app for image annotation, built with Park UI wrappers and Panda CSS.
 
 ## Layout
 
@@ -28,9 +28,9 @@ pnpm -C app build
 pnpm -C app start
 ```
 
-## SaaS-Ready Scaffold
+## SaaS Scaffold
 
-The starter includes a small file-backed SaaS scaffold that is useful for prototypes and early product work:
+The app includes a small file-backed SaaS scaffold that is useful for prototypes and early product work:
 
 - Magic-link auth: `app/src/lib/account/*` and `app/src/routes/api/auth/*`
 - Local user/session/credit ledger store with atomic writes under `APP_DATA_DIR/account`
@@ -46,35 +46,6 @@ docker compose up --build
 ```
 
 The scaffold intentionally stays generic: rename the cookie, product name, credit-pack env names, and success/cancel routes to match each app.
-
-## GitHub Pages Comps Explorer
-
-This repo includes a Pages workflow that builds a static, pre-rendered Comps Explorer and deploys it to GitHub Pages.
-
-- Workflow: [`.github/workflows/deploy-comps-explorer.yml`](.github/workflows/deploy-comps-explorer.yml)
-- Triggers: push to `main` and manual run (`workflow_dispatch`)
-- Build output uploaded to Pages: `app/.output/public`
-
-How it works:
-
-1. `actions/configure-pages` resolves the repository base path.
-2. The workflow sets `BASE_PATH` so the app works under project URLs like `/solid-start-panda-park-ui/`.
-3. The workflow sets `CI_SSG_PRERENDER=true` for the build, which enables CI-only prerender settings in [`app/app.config.ts`](app/app.config.ts):
-   - pre-render known explorer routes (`/`, `/comps`, `/comps/:component`)
-   - enable link crawling (`crawlLinks: true`) to emit additional static HTML
-4. `.nojekyll` is added so `_build/*` assets are served correctly.
-5. A safety check fails the build if prerendered `.html` files were not generated.
-
-Local production-like build check:
-
-```bash
-BASE_PATH=/solid-start-panda-park-ui/ CI_SSG_PRERENDER=true pnpm -C app build
-```
-
-After deploy, the explorer is available at:
-
-- Project pages: `https://<owner>.github.io/<repo>/` (for this repo: [https://byronwall.github.io/solid-start-panda-park-ui/](https://byronwall.github.io/solid-start-panda-park-ui/))
-- User/organization pages repo (`<owner>.github.io`): `https://<owner>.github.io/`
 
 ## UI Surface
 

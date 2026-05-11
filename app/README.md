@@ -29,7 +29,7 @@ pnpm start
 
 ## Reconciled Additions
 
-This starter now includes additional reusable wrappers and dev scaffolding sourced from `visual-notes`:
+This app includes additional reusable wrappers and dev scaffolding sourced from `visual-notes`:
 
 - New wrappers: `WrapWhen`, `ClearButton`, `ConfirmDialog`, `PanelPopover`, `SimpleDialog`, `SimplePopover`, `SimpleSelect`
 - UI wrapper quality fixes in `button`, `file-upload`, `select`, `tooltip`

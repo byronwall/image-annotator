@@ -7,6 +7,7 @@ import {
   Grid2X2,
   Highlighter,
   History,
+  Keyboard,
   ListOrdered,
   Maximize2,
   MousePointer2,
@@ -76,6 +77,7 @@ export type ImageEditorToolbarProps = {
   onZoomReset: () => void;
   onExport: () => void;
   onCopy: () => void;
+  onShowShortcuts: () => void;
 };
 
 export const ImageEditorToolbar = (props: ImageEditorToolbarProps) => {
@@ -87,18 +89,19 @@ export const ImageEditorToolbar = (props: ImageEditorToolbarProps) => {
       as="header"
       alignItems="center"
       justifyContent="space-between"
-      gap="3"
-      p="3"
+      gap="2"
+      p="2.5"
       borderBottomWidth="1px"
       borderColor="border"
       bg="bg.default"
-      flexWrap="wrap"
+      flexWrap={{ base: "wrap", lg: "nowrap" }}
+      overflowX="auto"
     >
-      <HStack gap="2" minW="0" flex="1" flexWrap="wrap">
+      <HStack gap="2" minW="0" flex="1" flexWrap="nowrap">
         <HStack gap="2" mr="1">
-          <Tooltip content={props.isHistoryOpen ? "Hide history" : "Show history"}>
+          <Tooltip content={props.isHistoryOpen ? "Hide sidebar" : "Show sidebar"}>
             <IconButton
-              aria-label={props.isHistoryOpen ? "Hide history" : "Show history"}
+              aria-label={props.isHistoryOpen ? "Hide sidebar" : "Show sidebar"}
               size="sm"
               variant={props.isHistoryOpen ? "solid" : "surface"}
               colorPalette={props.isHistoryOpen ? "blue" : "gray"}
@@ -111,7 +114,7 @@ export const ImageEditorToolbar = (props: ImageEditorToolbarProps) => {
             Image Annotator
           </Box>
         </HStack>
-        <HStack gap="1" flexWrap="wrap">
+        <HStack gap="1" flexWrap="nowrap">
           <For each={primaryTools}>
             {(tool) => (
               <Tooltip content={`${toolLabels[tool]} (${toolShortcuts[tool]})`} openDelay={250}>
@@ -131,8 +134,8 @@ export const ImageEditorToolbar = (props: ImageEditorToolbarProps) => {
         </HStack>
       </HStack>
 
-      <HStack gap="2" flexWrap="wrap" justifyContent="end">
-        <HStack gap="1">
+      <HStack gap="2" flexWrap="nowrap" justifyContent="end" flexShrink="0">
+        <HStack gap="1" flexWrap="nowrap">
           <Tooltip content="Zoom out (-)">
             <IconButton
               aria-label="Zoom out"
@@ -197,6 +200,16 @@ export const ImageEditorToolbar = (props: ImageEditorToolbarProps) => {
             onClick={props.onRedo}
           >
             <Redo2 />
+          </IconButton>
+        </Tooltip>
+        <Tooltip content="Keyboard shortcuts (Shift ?)">
+          <IconButton
+            aria-label="Keyboard shortcuts"
+            size="sm"
+            variant="surface"
+            onClick={props.onShowShortcuts}
+          >
+            <Keyboard />
           </IconButton>
         </Tooltip>
         <Button size="sm" variant="surface" onClick={props.onChooseFile}>

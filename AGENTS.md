@@ -12,7 +12,7 @@ Repository-level guidance for contributors and coding agents.
 - Prefer SolidStart data APIs (`query` + `createResource` for reads, server actions for writes).
 - For `createResource`, prefer reading `resource.latest` by default to avoid transient empty/loading blips during revalidation.
 - Use `resource()` directly only when you intentionally want a pending/loading transition in the UI.
-- For app navigation, prefer Solid Router navigation (`useNavigate`, `<A>`, router-aware `Link`) with root-relative route paths (for example `"/"` and `"/comps"`); avoid raw anchor navigation that can bypass configured router base paths.
+- For app navigation, prefer Solid Router navigation (`useNavigate`, `<A>`, router-aware `Link`) with root-relative route paths; avoid raw anchor navigation that can bypass configured router base paths.
 - Prefer `~/components/ui/*` wrappers over route-level direct Ark composition.
 - Prefer ParkUI wrappers for interactive controls over native elements when a wrapper exists.
 - Use `~/components/ui/tooltip` for user-facing hover/focus help text; avoid `title` attributes.
@@ -146,7 +146,7 @@ Use these when the task matches the skill intent. Open each skill's `SKILL.md` b
 
 - Root `.mcp.json` includes Ark UI MCP server wiring for component-aware assistance.
 - `app/vitest.config.ts` provides baseline testing config and `~` alias resolution.
-- The starter includes a file-backed SaaS scaffold for prototype auth, Stripe, email, analytics, and admin JSON endpoints. Keep it generic when extending it; move app-specific products, prices, and copy into env/config wrappers.
+- The app includes a file-backed SaaS scaffold for prototype auth, Stripe, email, analytics, and admin JSON endpoints. Keep it generic when extending it; move app-specific products, prices, and copy into env/config wrappers.
 - Local SaaS data is written under `APP_DATA_DIR` and defaults to `app/data/*`. Treat it as runtime state, not source.
 - Root `Dockerfile` and `docker-compose.yml` are known-working production scaffolds. Preserve the persisted `/app/data` volume when adapting them.
 
@@ -189,12 +189,6 @@ Use these when the task matches the skill intent. Open each skill's `SKILL.md` b
   - `pnpm -C app build`
   - a manual websocket smoke test against `/ws/jobs`
 
-## Component System Registry (Source Of Truth)
-
-- Component registry lives in `app/src/components/ui/demos.tsx`.
-- `DEMO_COMPONENTS` is rendered through `Dynamic`; when adding/removing component reference usages, update this registry first.
-- Keep component keys stable (`camelCase`) so `/comps/:component` links remain valid.
-
 ## Component System Composition Patterns
 
 - Action controls:
@@ -215,7 +209,7 @@ Use these when the task matches the skill intent. Open each skill's `SKILL.md` b
 
 ## Available Components (Detailed List)
 
-Each component file under `app/src/components/ui/*` also includes a colocated reference usage export (for example `*Demo`) that can be reused and registered in `DEMO_COMPONENTS`.
+Shared component wrappers live under `app/src/components/ui/*`.
 
 - `AbsoluteCenter` (`./absolute-center`): Centers one child in a bounded parent.
 - `Accordion` (`./accordion`): Composes `Root -> Item -> ItemTrigger -> ItemContent`.
@@ -283,7 +277,6 @@ Each component file under `app/src/components/ui/*` also includes a colocated re
 ## Component System Update Checklist
 
 - Add/update component file under `app/src/components/ui/`.
-- Register the component reference usage in `DEMO_COMPONENTS` (`app/src/components/ui/demos.tsx`).
 - Ensure composition uses shared wrappers and tokenized Panda styles.
 - Verify SSR-first render stability for overlays/select-like components.
 - Run `pnpm -C app type-check`.

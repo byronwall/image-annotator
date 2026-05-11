@@ -71,14 +71,24 @@ type CanvasFrame = {
   scaleY: number;
 };
 
+type PanDrag = {
+  clientX: number;
+  clientY: number;
+  scrollLeft: number;
+  scrollTop: number;
+};
+
 export const ImageEditorCanvas = (props: ImageEditorCanvasProps) => {
   let hostRef: HTMLDivElement | undefined;
   let scrollRef: HTMLDivElement | undefined;
   let canvasRef: HTMLCanvasElement | undefined;
+  let lastSelectionScrollKey: string | undefined;
   const [baseImage, setBaseImage] = createSignal<HTMLImageElement>();
   const [canvasFrame, setCanvasFrame] = createSignal<CanvasFrame>();
   const [isDragActive, setIsDragActive] = createSignal(false);
   const [pointerPoint, setPointerPoint] = createSignal<Point>();
+  const [isSpacePanning, setIsSpacePanning] = createSignal(false);
+  const [panDrag, setPanDrag] = createSignal<PanDrag>();
 
   createEffect(() => {
     const dataUrl = props.project?.baseImage.dataUrl;
@@ -132,6 +142,26 @@ export const ImageEditorCanvas = (props: ImageEditorCanvasProps) => {
     window.requestAnimationFrame(updateCanvasFrame);
   });
 
+  createEffect(() => {
+    const annotation = props.selectedAnnotation;
+    const id = annotation?.id;
+
+    if (!id || annotation.hidden) {
+      return;
+    }
+
+    const scrollKey = `${id}:${props.zoom}`;
+
+    if (scrollKey === lastSelectionScrollKey) {
+      return;
+    }
+
+    lastSelectionScrollKey = scrollKey;
+    window.requestAnimationFrame(() =>
+      ensureProjectBoundsVisible(getAnnotationBounds(annotation)),
+    );
+  });
+
   onMount(() => {
     const resizeObserver = new ResizeObserver(() => updateCanvasFrame());
 
@@ -144,14 +174,54 @@ export const ImageEditorCanvas = (props: ImageEditorCanvasProps) => {
     }
 
     const handleResize = () => updateCanvasFrame();
+    const handleImageLayerLoad = () => {
+      const project = props.project;
+      const image = baseImage();
+
+      if (!project || !image || !canvasRef) {
+        return;
+      }
+
+      renderImageEditorCanvas(
+        canvasRef,
+        image,
+        project.annotations,
+        props.draft,
+        props.selectedId,
+      );
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (
+        event.code !== "Space" ||
+        !props.project ||
+        isEditableTarget(event.target)
+      ) {
+        return;
+      }
+
+      event.preventDefault();
+      setIsSpacePanning(true);
+    };
+    const handleKeyUp = (event: KeyboardEvent) => {
+      if (event.code === "Space") {
+        setIsSpacePanning(false);
+        setPanDrag(undefined);
+      }
+    };
     window.addEventListener("resize", handleResize);
+    window.addEventListener("keydown", handleKeyDown);
+    window.addEventListener("keyup", handleKeyUp);
     scrollRef?.addEventListener("scroll", handleResize, { passive: true });
+    canvasRef?.addEventListener("image-layer-load", handleImageLayerLoad);
     updateCanvasFrame();
 
     onCleanup(() => {
       resizeObserver.disconnect();
       window.removeEventListener("resize", handleResize);
+      window.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("keyup", handleKeyUp);
       scrollRef?.removeEventListener("scroll", handleResize);
+      canvasRef?.removeEventListener("image-layer-load", handleImageLayerLoad);
     });
   });
 
@@ -166,7 +236,7 @@ export const ImageEditorCanvas = (props: ImageEditorCanvasProps) => {
   };
 
   const handleWheel = (event: WheelEvent) => {
-    if (!props.project || (!event.metaKey && !event.ctrlKey)) {
+    if (!props.project) {
       return;
     }
 
@@ -174,7 +244,32 @@ export const ImageEditorCanvas = (props: ImageEditorCanvasProps) => {
     const currentZoom =
       props.zoom === "fit" ? canvasFrame()?.scaleX ?? 1 : props.zoom;
     const multiplier = event.deltaY < 0 ? 1.12 : 0.88;
-    props.onZoomChange(clampZoom(currentZoom * multiplier));
+    const nextZoom = clampZoom(currentZoom * multiplier);
+    const canvasBounds = canvasRef?.getBoundingClientRect();
+    const scrollBounds = scrollRef?.getBoundingClientRect();
+    const anchor =
+      canvasBounds && scrollBounds
+        ? {
+            x: (event.clientX - canvasBounds.left) / currentZoom,
+            y: (event.clientY - canvasBounds.top) / currentZoom,
+            viewportX: event.clientX - scrollBounds.left,
+            viewportY: event.clientY - scrollBounds.top,
+          }
+        : undefined;
+
+    props.onZoomChange(nextZoom);
+
+    if (anchor && scrollRef && canvasRef) {
+      window.requestAnimationFrame(() => {
+        if (!scrollRef || !canvasRef) {
+          return;
+        }
+
+        scrollRef.scrollLeft = canvasRef.offsetLeft + anchor.x * nextZoom - anchor.viewportX;
+        scrollRef.scrollTop = canvasRef.offsetTop + anchor.y * nextZoom - anchor.viewportY;
+        updateCanvasFrame();
+      });
+    }
   };
 
   const pointFromEvent = (event: CanvasCoordinateEvent): Point => {
@@ -212,11 +307,48 @@ export const ImageEditorCanvas = (props: ImageEditorCanvasProps) => {
     });
   };
 
+  const ensureProjectBoundsVisible = (bounds: Bounds) => {
+    const project = props.project;
+
+    if (!project || !scrollRef || !canvasRef || props.zoom === "fit") {
+      return;
+    }
+
+    const margin = 56;
+    const scale = props.zoom;
+    const left = canvasRef.offsetLeft + bounds.x * scale;
+    const top = canvasRef.offsetTop + bounds.y * scale;
+    const right = left + bounds.width * scale;
+    const bottom = top + bounds.height * scale;
+    const visibleLeft = scrollRef.scrollLeft;
+    const visibleTop = scrollRef.scrollTop;
+    const visibleRight = visibleLeft + scrollRef.clientWidth;
+    const visibleBottom = visibleTop + scrollRef.clientHeight;
+    let nextLeft = visibleLeft;
+    let nextTop = visibleTop;
+
+    if (left < visibleLeft + margin) {
+      nextLeft = Math.max(0, left - margin);
+    } else if (right > visibleRight - margin) {
+      nextLeft = right - scrollRef.clientWidth + margin;
+    }
+
+    if (top < visibleTop + margin) {
+      nextTop = Math.max(0, top - margin);
+    } else if (bottom > visibleBottom - margin) {
+      nextTop = bottom - scrollRef.clientHeight + margin;
+    }
+
+    if (nextLeft !== visibleLeft || nextTop !== visibleTop) {
+      scrollRef.scrollTo({ left: nextLeft, top: nextTop, behavior: "auto" });
+    }
+  };
+
   const shouldShowContextBar = createMemo(
     () =>
       props.project !== undefined &&
       props.inlineEditingAnnotation === undefined &&
-      (props.selectedAnnotation !== undefined ||
+      ((props.selectedAnnotation !== undefined && !props.selectedAnnotation.hidden) ||
         (props.activeTool !== "select" && props.activeTool !== "crop")),
   );
 
@@ -286,7 +418,12 @@ export const ImageEditorCanvas = (props: ImageEditorCanvasProps) => {
         "max-width": "100%",
         "max-height": "calc(100dvh - 172px)",
         "box-shadow": "0 20px 80px rgba(15, 23, 42, 0.22)",
-        cursor: canvasCursor(props.activeTool, props.selectedAnnotation !== undefined),
+        cursor: canvasCursor(
+          props.activeTool,
+          props.selectedAnnotation !== undefined && !props.selectedAnnotation.hidden,
+          isSpacePanning(),
+          panDrag() !== undefined,
+        ),
         "touch-action": "none",
       };
     }
@@ -298,7 +435,12 @@ export const ImageEditorCanvas = (props: ImageEditorCanvasProps) => {
       "max-width": "none",
       "max-height": "none",
       "box-shadow": "0 20px 80px rgba(15, 23, 42, 0.22)",
-      cursor: canvasCursor(props.activeTool, props.selectedAnnotation !== undefined),
+      cursor: canvasCursor(
+        props.activeTool,
+        props.selectedAnnotation !== undefined && !props.selectedAnnotation.hidden,
+        isSpacePanning(),
+        panDrag() !== undefined,
+      ),
       "touch-action": "none",
     };
   });
@@ -328,6 +470,20 @@ export const ImageEditorCanvas = (props: ImageEditorCanvasProps) => {
     }
 
     return undefined;
+  });
+
+  const layerReadout = createMemo(() => {
+    const project = props.project;
+
+    if (!project) {
+      return "0 layers";
+    }
+
+    const visible = project.annotations.filter((annotation) => !annotation.hidden).length;
+
+    return visible === project.annotations.length
+      ? `${project.annotations.length} layers`
+      : `${visible}/${project.annotations.length} visible`;
   });
 
   return (
@@ -411,18 +567,49 @@ export const ImageEditorCanvas = (props: ImageEditorCanvasProps) => {
                 aria-label="Editable image canvas"
                 data-active-tool={props.activeTool}
                 onPointerDown={(event) => {
+                  if (event.button === 1 || isSpacePanning()) {
+                    event.preventDefault();
+                    event.currentTarget.setPointerCapture(event.pointerId);
+                    setPanDrag({
+                      clientX: event.clientX,
+                      clientY: event.clientY,
+                      scrollLeft: scrollRef?.scrollLeft ?? 0,
+                      scrollTop: scrollRef?.scrollTop ?? 0,
+                    });
+                    return;
+                  }
+
                   event.currentTarget.setPointerCapture(event.pointerId);
                   const point = pointFromEvent(event);
                   setPointerPoint(point);
                   props.onPointerDown(point, event);
                 }}
                 onPointerMove={(event) => {
+                  const currentPanDrag = panDrag();
+
+                  if (currentPanDrag && scrollRef) {
+                    event.preventDefault();
+                    scrollRef.scrollLeft =
+                      currentPanDrag.scrollLeft -
+                      (event.clientX - currentPanDrag.clientX);
+                    scrollRef.scrollTop =
+                      currentPanDrag.scrollTop -
+                      (event.clientY - currentPanDrag.clientY);
+                    updateCanvasFrame();
+                    return;
+                  }
+
                   const point = pointFromEvent(event);
                   setPointerPoint(point);
                   props.onPointerMove(point, event);
                 }}
                 onPointerUp={(event) => {
                   event.currentTarget.releasePointerCapture(event.pointerId);
+                  if (panDrag()) {
+                    setPanDrag(undefined);
+                    return;
+                  }
+
                   const point = pointFromEvent(event);
                   setPointerPoint(point);
                   props.onPointerUp(point, event);
@@ -498,7 +685,7 @@ export const ImageEditorCanvas = (props: ImageEditorCanvasProps) => {
             >
               <Box>{project().width} x {project().height}</Box>
               <Box color="fg.subtle">/</Box>
-              <Box>{project().annotations.length} layers</Box>
+              <Box>{layerReadout()}</Box>
               <Show when={pointerPoint()}>
                 {(point) => (
                   <>
@@ -536,7 +723,20 @@ const clampZoom = (zoom: number) => Math.max(0.1, Math.min(5, zoom));
 
 const numericZoom = (zoom: ImageEditorZoom) => (zoom === "fit" ? 1 : zoom);
 
-const canvasCursor = (tool: ImageEditorTool, hasSelection: boolean) => {
+const canvasCursor = (
+  tool: ImageEditorTool,
+  hasSelection: boolean,
+  isPanning: boolean,
+  isPanDragging: boolean,
+) => {
+  if (isPanDragging) {
+    return "grabbing";
+  }
+
+  if (isPanning) {
+    return "grab";
+  }
+
   if (tool !== "select") {
     return "crosshair";
   }
@@ -555,3 +755,16 @@ const normalizeDraftRect = (
   width: Math.abs(width),
   height: Math.abs(height),
 });
+
+const isEditableTarget = (target: EventTarget | null) => {
+  if (!(target instanceof HTMLElement)) {
+    return false;
+  }
+
+  return (
+    target.isContentEditable ||
+    target instanceof HTMLInputElement ||
+    target instanceof HTMLTextAreaElement ||
+    target instanceof HTMLSelectElement
+  );
+};

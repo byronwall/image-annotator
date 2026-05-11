@@ -104,7 +104,8 @@ export const InlineAnnotationEditor = (props: InlineAnnotationEditorProps) => {
                 minH="12"
                 bg="bg.default"
                 boxShadow="lg"
-                resize="both"
+                resize="none"
+                overflow="hidden"
               />
             )}
           </Show>
