@@ -28,7 +28,7 @@ services:
       CREDIT_PACK_AMOUNT_CENTS: ${CREDIT_PACK_AMOUNT_CENTS:-1000}
       CREDIT_PACK_CURRENCY: ${CREDIT_PACK_CURRENCY:-usd}
     ports:
-      - "${APP_PORT:-3000}:3000"
+      - "${APP_PORT:-}:3000"
     volumes:
       - starter-data:/app/data
 
