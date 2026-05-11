@@ -467,6 +467,27 @@ export const ImageEditor = () => {
     }
 
     if (tool === "text") {
+      const hitText = findHitAnnotation(
+        currentProject.annotations,
+        point,
+        (annotation) => annotation.type === "text",
+      );
+
+      if (hitText) {
+        batch(() => {
+          setSelectedId(hitText.id);
+          setInlineEditingId(undefined);
+          setInteraction({
+            type: "move",
+            annotationId: hitText.id,
+            start: point,
+            originalAnnotations: structuredClone(currentProject.annotations),
+          });
+        });
+        setStatus("Selected text layer.");
+        return;
+      }
+
       const annotation = createTextAnnotation(point, settings());
       commitProject(
         {
@@ -1858,11 +1879,12 @@ const isUsableDraft = (draft: EditorDraft) => {
 const findHitAnnotation = (
   annotations: ImageAnnotation[],
   point: Point,
+  matches: (annotation: ImageAnnotation) => boolean = () => true,
 ): ImageAnnotation | undefined => {
   for (let index = annotations.length - 1; index >= 0; index -= 1) {
     const annotation = annotations[index];
 
-    if (annotation && hitTestAnnotation(annotation, point)) {
+    if (annotation && matches(annotation) && hitTestAnnotation(annotation, point)) {
       return annotation;
     }
   }
