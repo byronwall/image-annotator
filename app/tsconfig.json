@@ -1,0 +1,24 @@
+{
+  "compilerOptions": {
+    "target": "ESNext",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "allowSyntheticDefaultImports": true,
+    "esModuleInterop": true,
+    "jsx": "preserve",
+    "jsxImportSource": "solid-js",
+    "allowJs": true,
+    "strict": true,
+    "noEmit": true,
+    "types": ["vite/client", "@solidjs/start/env", "vinxi/types/client"],
+    "skipLibCheck": true,
+    "isolatedModules": true,
+    "paths": {
+      "styled-system/*": ["./styled-system/*"],
+      "~/*": ["./src/*"]
+    },
+    "baseUrl": "."
+  },
+  "include": ["src", "styled-system", "panda.config.ts"],
+  "exclude": ["node_modules"]
+}

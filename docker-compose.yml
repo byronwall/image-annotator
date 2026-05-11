@@ -1,0 +1,36 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    image: solid-start-panda-park-ui-app
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: 3000
+      BASE_PATH: ${BASE_PATH:-/}
+      APP_DATA_DIR: /app/data
+      APP_BASE_URL: ${APP_BASE_URL:?Set APP_BASE_URL in .env before starting the app}
+      PRODUCT_NAME: ${PRODUCT_NAME:-Starter}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-5-mini}
+      OPENAI_HEAVY_MODEL: ${OPENAI_HEAVY_MODEL:-gpt-5.4}
+      EMAIL_DELIVERY: ${EMAIL_DELIVERY:-console}
+      RESEND_API_KEY: ${RESEND_API_KEY:-}
+      EMAIL_FROM: ${EMAIL_FROM:-}
+      SUPER_USER_EMAIL: ${SUPER_USER_EMAIL:?Set SUPER_USER_EMAIL in .env before starting the app}
+      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
+      STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
+      STRIPE_PRICE_CREDIT_PACK: ${STRIPE_PRICE_CREDIT_PACK:-}
+      CREDIT_PACK_CREDITS: ${CREDIT_PACK_CREDITS:-10}
+      CREDIT_PACK_AMOUNT_CENTS: ${CREDIT_PACK_AMOUNT_CENTS:-1000}
+      CREDIT_PACK_CURRENCY: ${CREDIT_PACK_CURRENCY:-usd}
+    ports:
+      - "${APP_PORT:-3000}:3000"
+    volumes:
+      - starter-data:/app/data
+
+volumes:
+  starter-data:

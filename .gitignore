@@ -1,0 +1,6 @@
+app/.env
+app/data/
+app/.output/
+app/.vinxi/
+app/styled-system/
+node_modules/

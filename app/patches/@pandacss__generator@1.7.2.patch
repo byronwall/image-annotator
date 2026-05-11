@@ -1,0 +1,84 @@
+diff --git a/dist/index.js b/dist/index.js
+index d55a6d1e1899040bed9f76e81e087f5fbe2cb2af..c91dc13bc90d3704af641fec72ff2897d46c7bb1 100644
+--- a/dist/index.js
++++ b/dist/index.js
+@@ -2866,7 +2866,7 @@ function generateSolidCreateStyleContext(ctx) {
+ 
+           return createComponent(StyleContext.Provider, {
+             get value() {
+-              return slotStyles()
++              return slotStyles
+             },
+             get children() {
+               return createComponent(
+@@ -2911,7 +2911,7 @@ function generateSolidCreateStyleContext(ctx) {
+ 
+           return createComponent(StyleContext.Provider, {
+             get value() {
+-              return slotStyles()
++              return slotStyles
+             },
+             get children() {
+               return createComponent(
+@@ -2937,15 +2937,17 @@ function generateSolidCreateStyleContext(ctx) {
+         
+         const WithContext = (props) => {
+           const slotStyles = useStyleContext(componentName, slot)
++          const getSlotStyles = typeof slotStyles === "function" ? slotStyles : () => slotStyles;
+           const [local, propsWithoutChildren] = splitProps(props, ["children"])
+ 
+           const resolvedProps = createMemo(() => {
++            const currentSlotStyles = getSlotStyles();
+             const propsWithClass = {
+               ...propsWithoutChildren,
+               class: propsWithoutChildren.class ?? options?.defaultProps?.class,
+             }
+-            const resolved = getResolvedProps(propsWithClass, slotStyles[slot])
+-            resolved.class = cx(resolved.class, slotStyles._classNameMap?.[slot])
++            const resolved = getResolvedProps(propsWithClass, currentSlotStyles[slot])
++            resolved.class = cx(resolved.class, currentSlotStyles._classNameMap?.[slot])
+             return resolved
+           })
+ 
+diff --git a/dist/index.mjs b/dist/index.mjs
+index 1f57aed58c58e08f4c663e5144dccb3c4e9c1478..9a71a63223d9d247bb92693760c68307fc44da8b 100644
+--- a/dist/index.mjs
++++ b/dist/index.mjs
+@@ -2829,7 +2829,7 @@ function generateSolidCreateStyleContext(ctx) {
+ 
+           return createComponent(StyleContext.Provider, {
+             get value() {
+-              return slotStyles()
++              return slotStyles
+             },
+             get children() {
+               return createComponent(
+@@ -2874,7 +2874,7 @@ function generateSolidCreateStyleContext(ctx) {
+ 
+           return createComponent(StyleContext.Provider, {
+             get value() {
+-              return slotStyles()
++              return slotStyles
+             },
+             get children() {
+               return createComponent(
+@@ -2900,15 +2900,17 @@ function generateSolidCreateStyleContext(ctx) {
+         
+         const WithContext = (props) => {
+           const slotStyles = useStyleContext(componentName, slot)
++          const getSlotStyles = typeof slotStyles === 'function' ? slotStyles : () => slotStyles
+           const [local, propsWithoutChildren] = splitProps(props, ["children"])
+ 
+           const resolvedProps = createMemo(() => {
++            const currentSlotStyles = getSlotStyles()
+             const propsWithClass = {
+               ...propsWithoutChildren,
+               class: propsWithoutChildren.class ?? options?.defaultProps?.class,
+             }
+-            const resolved = getResolvedProps(propsWithClass, slotStyles[slot])
+-            resolved.class = cx(resolved.class, slotStyles._classNameMap?.[slot])
++            const resolved = getResolvedProps(propsWithClass, currentSlotStyles[slot])
++            resolved.class = cx(resolved.class, currentSlotStyles._classNameMap?.[slot])
+             return resolved
+           })
+ 

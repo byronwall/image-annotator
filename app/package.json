@@ -1,0 +1,57 @@
+{
+  "name": "example-bare",
+  "type": "module",
+  "scripts": {
+    "prepare": "panda codegen",
+    "dev": "pnpm prepare && vinxi dev",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "test": "vitest run",
+    "type-check": "tsc --noEmit",
+    "build": "vinxi build",
+    "start": "vinxi start",
+    "panda": "panda codegen"
+  },
+  "dependencies": {
+    "@ai-sdk/openai": "^2.0.24",
+    "@ark-ui/solid": "^5.30.0",
+    "@solidjs/meta": "^0.29.4",
+    "@solidjs/router": "^0.15.3",
+    "@solidjs/start": "^1.1.0",
+    "ai": "^5.0.39",
+    "lucide-solid": "^0.562.0",
+    "mermaid": "^11.12.2",
+    "remark-gfm": "^4.0.1",
+    "shiki": "^3.21.0",
+    "solid-js": "^1.9.5",
+    "solid-markdown": "^2.1.1",
+    "vinxi": "^0.5.7",
+    "zod": "^4.1.5"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "devDependencies": {
+    "@dword-design/eslint-plugin-import-alias": "^5.1.1",
+    "@pandacss/dev": "^1.7.2",
+    "@types/node": "^20.11.26",
+    "@typescript-eslint/eslint-plugin": "^7.6.0",
+    "@typescript-eslint/parser": "^7.6.0",
+    "eslint": "^9.13.0",
+    "eslint-import-resolver-typescript": "^3.6.1",
+    "eslint-plugin-import": "^2.28.1",
+    "eslint-plugin-solid": "^0.14.3",
+    "eslint-plugin-unused-imports": "^4.1.4",
+    "typescript": "^5.6.2",
+    "vite": "^6.2.2",
+    "vite-plugin-lucide-preprocess": "^1.4.6",
+    "vite-tsconfig-paths": "^6.0.3",
+    "vitest": "^2.1.4"
+  },
+  "pnpm": {
+    "patchedDependencies": {
+      "vinxi@0.5.10": "patches/vinxi@0.5.10.patch",
+      "@pandacss/generator@1.7.2": "patches/@pandacss__generator@1.7.2.patch"
+    }
+  }
+}

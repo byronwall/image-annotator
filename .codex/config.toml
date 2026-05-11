@@ -1,0 +1,6 @@
+[mcp_servers.ark-ui]
+args = [
+    "-y",
+    "@ark-ui/mcp",
+]
+command = "npx"
