@@ -14,11 +14,13 @@ import {
   clampBoundsToProject,
   getAnnotationBounds,
   getBaseImageOffset,
+  getBoundsResizeHandleAt,
   getResizeHandleAt,
   hitTestAnnotation,
   loadImageElement,
   moveAnnotation,
   normalizeRect,
+  resizeBounds,
   resizeAnnotation,
   renderProjectToPngBlob,
   type Bounds,
@@ -30,7 +32,9 @@ import {
   appendPngDataToBlob,
   createPngDataPayload,
   extractPngDataFromFile,
+  extractPngDataFromText,
   readFileAsDataUrl,
+  serializePngDataPayload,
 } from "./image-editor.png-data";
 import {
   cloneProject,
@@ -44,6 +48,7 @@ import {
   type HistoryEntry,
   type ImageAnnotation,
   type ImageEditorProject,
+  type ImageEditorPngPayload,
   type ImageEditorTool,
   type ImageEditorZoom,
   type Point,
@@ -73,7 +78,30 @@ type ResizeInteraction = {
   originalAnnotations: ImageAnnotation[];
 };
 
-type EditorInteraction = DrawingInteraction | MoveInteraction | ResizeInteraction;
+type CropMoveInteraction = {
+  type: "crop-move";
+  start: Point;
+  initialBounds: Bounds;
+};
+
+type CropResizeInteraction = {
+  type: "crop-resize";
+  handle: ResizeHandle;
+  start: Point;
+  initialBounds: Bounds;
+};
+
+type EditorInteraction =
+  | DrawingInteraction
+  | MoveInteraction
+  | ResizeInteraction
+  | CropMoveInteraction
+  | CropResizeInteraction;
+
+type PngExport = {
+  blob: Blob;
+  payload: ImageEditorPngPayload;
+};
 
 export const ImageEditor = () => {
   let fileInputRef: HTMLInputElement | undefined;
@@ -157,16 +185,7 @@ export const ImageEditor = () => {
     shellRef?.focus();
 
     const handlePaste = (event: ClipboardEvent) => {
-      const files = Array.from(event.clipboardData?.files ?? []).filter((file) =>
-        file.type.startsWith("image/"),
-      );
-
-      if (files.length === 0) {
-        return;
-      }
-
-      event.preventDefault();
-      void handlePastedImage(files[0]);
+      void handleClipboardPaste(event);
     };
 
     window.addEventListener("paste", handlePaste);
@@ -178,6 +197,40 @@ export const ImageEditor = () => {
       window.removeEventListener("keydown", handleKeyboardShortcut);
     });
   });
+
+  const handleClipboardPaste = async (event: ClipboardEvent) => {
+    if (isEditableTarget(event.target)) {
+      return;
+    }
+
+    const clipboardData = event.clipboardData;
+
+    if (!clipboardData) {
+      return;
+    }
+
+    const pngDataFallback = extractPngDataFromText(
+      clipboardData.getData("text/plain"),
+    );
+    const files = getClipboardImageFiles(clipboardData);
+
+    if (files.length === 0) {
+      if (pngDataFallback) {
+        event.preventDefault();
+        restorePngDataProject(
+          pngDataFallback.project,
+          pngDataFallback.historyLog,
+          pngDataFallback.history,
+        );
+        setStatus("Opened editable PNGDATA project.");
+      }
+
+      return;
+    }
+
+    event.preventDefault();
+    await handlePastedImage(files[0], pngDataFallback);
+  };
 
   const clearKeyboardNudgeTimer = () => {
     if (keyboardNudgeTimer === undefined) {
@@ -261,7 +314,11 @@ export const ImageEditor = () => {
     });
   };
 
-  const importFiles = async (files: File[], label: string) => {
+  const importFiles = async (
+    files: File[],
+    label: string,
+    pngDataFallback?: ImageEditorPngPayload,
+  ) => {
     const file = files.find((candidate) => candidate.type.startsWith("image/"));
 
     if (!file) {
@@ -271,12 +328,13 @@ export const ImageEditor = () => {
 
     try {
       const embeddedPayload = await extractPngDataFromFile(file);
+      const restoredPayload = embeddedPayload ?? pngDataFallback;
 
-      if (embeddedPayload) {
+      if (restoredPayload) {
         restorePngDataProject(
-          embeddedPayload.project,
-          embeddedPayload.historyLog,
-          embeddedPayload.history,
+          restoredPayload.project,
+          restoredPayload.historyLog,
+          restoredPayload.history,
         );
         setStatus("Opened editable PNGDATA project.");
         return;
@@ -375,6 +433,11 @@ export const ImageEditor = () => {
         setSelectedId(undefined);
       }
 
+      if (tool !== "crop" && draft()?.type === "crop") {
+        setDraft(undefined);
+        setInteraction(undefined);
+      }
+
       setActiveTool(tool);
     });
     setStatus(`${toolLabels[tool]} tool`);
@@ -405,6 +468,38 @@ export const ImageEditor = () => {
       return;
     }
 
+    const tool = activeTool();
+    const currentDraft = draft();
+
+    if (tool === "crop" && currentDraft?.type === "crop") {
+      const cropBounds = normalizeRect(
+        currentDraft.x,
+        currentDraft.y,
+        currentDraft.width,
+        currentDraft.height,
+      );
+      const cropResizeHandle = getBoundsResizeHandleAt(cropBounds, point);
+
+      if (cropResizeHandle) {
+        setInteraction({
+          type: "crop-resize",
+          handle: cropResizeHandle,
+          start: point,
+          initialBounds: cropBounds,
+        });
+        return;
+      }
+
+      if (isPointInBounds(point, cropBounds)) {
+        setInteraction({
+          type: "crop-move",
+          start: point,
+          initialBounds: cropBounds,
+        });
+        return;
+      }
+    }
+
     const selected = selectedAnnotation();
     const resizeHandle = selected ? getResizeHandleAt(selected, point) : undefined;
 
@@ -420,8 +515,6 @@ export const ImageEditor = () => {
       setActiveTool("select");
       return;
     }
-
-    const tool = activeTool();
 
     if (tool === "select") {
       const hit = findHitAnnotation(currentProject.annotations, point);
@@ -544,7 +637,7 @@ export const ImageEditor = () => {
     if (currentInteraction.type === "move") {
       const deltaX = point.x - currentInteraction.start.x;
       const deltaY = point.y - currentInteraction.start.y;
-      setProject({
+      const nextProject = {
         ...currentProject,
         annotations: currentInteraction.originalAnnotations.map((annotation) =>
           annotation.id === currentInteraction.annotationId
@@ -552,12 +645,18 @@ export const ImageEditor = () => {
             : annotation,
         ),
         updatedAt: Date.now(),
+      };
+      const expanded = expandProjectForInteraction(nextProject, currentInteraction);
+
+      batch(() => {
+        setProject(expanded.project);
+        setInteraction(expanded.interaction);
       });
       return;
     }
 
     if (currentInteraction.type === "resize") {
-      setProject({
+      const nextProject = {
         ...currentProject,
         annotations: currentInteraction.originalAnnotations.map((annotation) =>
           annotation.id === currentInteraction.annotationId
@@ -570,7 +669,39 @@ export const ImageEditor = () => {
             : annotation,
         ),
         updatedAt: Date.now(),
+      };
+      const expanded = expandProjectForInteraction(nextProject, currentInteraction);
+
+      batch(() => {
+        setProject(expanded.project);
+        setInteraction(expanded.interaction);
       });
+      return;
+    }
+
+    if (currentInteraction.type === "crop-move") {
+      const deltaX = point.x - currentInteraction.start.x;
+      const deltaY = point.y - currentInteraction.start.y;
+      const bounds = clampMovableBoundsToProject(
+        moveBounds(currentInteraction.initialBounds, deltaX, deltaY),
+        currentProject,
+      );
+
+      setDraft(createCropDraftFromBounds(bounds));
+      return;
+    }
+
+    if (currentInteraction.type === "crop-resize") {
+      const bounds = clampBoundsToProject(
+        resizeBounds(
+          currentInteraction.initialBounds,
+          currentInteraction.handle,
+          point,
+        ),
+        currentProject,
+      );
+
+      setDraft(createCropDraftFromBounds(bounds));
       return;
     }
 
@@ -580,12 +711,27 @@ export const ImageEditor = () => {
       return;
     }
 
-    setDraft(
-      updateDraft(currentDraft, currentInteraction.start, point, {
-        centerFromStart: event.altKey,
-        constrain: event.shiftKey,
-      }),
+    const nextDraft = updateDraft(currentDraft, currentInteraction.start, point, {
+      centerFromStart: event.altKey,
+      constrain: event.shiftKey,
+    });
+
+    if (nextDraft.type === "crop") {
+      setDraft(nextDraft);
+      return;
+    }
+
+    const expanded = expandProjectForDraft(
+      currentProject,
+      nextDraft,
+      currentInteraction,
     );
+
+    batch(() => {
+      setProject(expanded.project);
+      setDraft(expanded.draft);
+      setInteraction(expanded.interaction);
+    });
   };
 
   const handlePointerUp = (point: Point, event: PointerEvent) => {
@@ -593,6 +739,14 @@ export const ImageEditor = () => {
     const currentInteraction = interaction();
 
     if (!currentInteraction) {
+      return;
+    }
+
+    if (
+      currentInteraction.type === "crop-move" ||
+      currentInteraction.type === "crop-resize"
+    ) {
+      finishCropAdjustment(currentInteraction, point);
       return;
     }
 
@@ -609,17 +763,46 @@ export const ImageEditor = () => {
     const currentDraft = draft();
     const currentProject = project();
 
+    if (currentDraft?.type === "crop" && currentProject) {
+      const cropBounds = clampBoundsToProject(
+        normalizeRect(
+          currentDraft.x,
+          currentDraft.y,
+          currentDraft.width,
+          currentDraft.height,
+        ),
+        currentProject,
+      );
+
+      batch(() => {
+        setInteraction(undefined);
+        setDraft(
+          cropBounds.width >= 8 && cropBounds.height >= 8
+            ? createCropDraftFromBounds(cropBounds)
+            : undefined,
+        );
+        setSelectedId(undefined);
+        setActiveTool("crop");
+      });
+      setStatus(
+        cropBounds.width >= 8 && cropBounds.height >= 8
+          ? `Crop ${Math.round(cropBounds.width)} x ${Math.round(cropBounds.height)} ready.`
+          : "Crop area is too small.",
+      );
+      return;
+    }
+
     batch(() => {
       setInteraction(undefined);
       setDraft(undefined);
     });
 
-    if (!currentDraft || !currentProject || !isUsableDraft(currentDraft)) {
-      return;
-    }
-
-    if (currentDraft.type === "crop") {
-      void cropProject(currentDraft, currentProject);
+    if (
+      !currentDraft ||
+      !currentProject ||
+      currentDraft.type === "crop" ||
+      !isUsableDraft(currentDraft)
+    ) {
       return;
     }
 
@@ -690,6 +873,40 @@ export const ImageEditor = () => {
     commitProject(currentProject, "Resized layer");
   };
 
+  const finishCropAdjustment = (
+    currentInteraction: CropMoveInteraction | CropResizeInteraction,
+    point: Point,
+  ) => {
+    const movedDistance = distance(currentInteraction.start, point);
+
+    setInteraction(undefined);
+
+    if (movedDistance >= 1.5) {
+      setStatus("Adjusted crop boundary.");
+    }
+  };
+
+  const applyCropDraft = () => {
+    const currentDraft = draft();
+    const currentProject = project();
+
+    if (!currentProject || currentDraft?.type !== "crop") {
+      setStatus("Draw a crop boundary first.");
+      return;
+    }
+
+    void cropProject(currentDraft, currentProject);
+  };
+
+  const cancelCropDraft = () => {
+    batch(() => {
+      setDraft(undefined);
+      setInteraction(undefined);
+      setActiveTool("select");
+    });
+    setStatus("Canceled crop.");
+  };
+
   const cropProject = async (
     cropDraft: CropDraft,
     currentProject: ImageEditorProject,
@@ -752,6 +969,8 @@ export const ImageEditor = () => {
         "Cropped canvas",
       );
       batch(() => {
+        setDraft(undefined);
+        setInteraction(undefined);
         setSelectedId(undefined);
         setActiveTool("select");
       });
@@ -761,9 +980,9 @@ export const ImageEditor = () => {
   };
 
   const exportPng = async () => {
-    const blob = await buildPngBlob();
+    const pngExport = await buildPngExport();
 
-    if (!blob) {
+    if (!pngExport) {
       return;
     }
 
@@ -773,6 +992,7 @@ export const ImageEditor = () => {
       return;
     }
 
+    const { blob } = pngExport;
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement("a");
     anchor.href = url;
@@ -783,9 +1003,9 @@ export const ImageEditor = () => {
   };
 
   const copyPng = async () => {
-    const blob = await buildPngBlob();
+    const pngExport = await buildPngExport();
 
-    if (!blob) {
+    if (!pngExport) {
       return;
     }
 
@@ -795,9 +1015,12 @@ export const ImageEditor = () => {
     }
 
     try {
+      const pngDataText = serializePngDataPayload(pngExport.payload);
+
       await navigator.clipboard.write([
         new ClipboardItem({
-          "image/png": blob,
+          "image/png": pngExport.blob,
+          "text/plain": new Blob([pngDataText], { type: "text/plain" }),
         }),
       ]);
       setStatus("Copied PNG with PNGDATA.");
@@ -806,7 +1029,7 @@ export const ImageEditor = () => {
     }
   };
 
-  const buildPngBlob = async () => {
+  const buildPngExport = async (): Promise<PngExport | undefined> => {
     commitPendingKeyboardNudge();
     const currentProject = project();
 
@@ -821,8 +1044,9 @@ export const ImageEditor = () => {
         currentProject,
         history().slice(0, historyIndex() + 1),
       );
+      const blob = await appendPngDataToBlob(renderedBlob, payload);
 
-      return await appendPngDataToBlob(renderedBlob, payload);
+      return { blob, payload };
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Unable to export image.");
       return undefined;
@@ -1123,15 +1347,31 @@ export const ImageEditor = () => {
     return true;
   };
 
-  const handlePastedImage = async (file: File | undefined) => {
+  const handlePastedImage = async (
+    file: File | undefined,
+    pngDataFallback?: ImageEditorPngPayload,
+  ) => {
     if (!file) {
+      return;
+    }
+
+    const embeddedPayload = await extractPngDataFromFile(file);
+    const restoredPayload = embeddedPayload ?? pngDataFallback;
+
+    if (restoredPayload) {
+      restorePngDataProject(
+        restoredPayload.project,
+        restoredPayload.historyLog,
+        restoredPayload.history,
+      );
+      setStatus("Opened editable PNGDATA project.");
       return;
     }
 
     const currentProject = project();
 
     if (!currentProject) {
-      void importFiles([file], "Pasted image");
+      void importFiles([file], "Pasted image", pngDataFallback);
       return;
     }
 
@@ -1296,13 +1536,13 @@ export const ImageEditor = () => {
       return;
     }
 
-    setProject({
+    setProject(expandProjectToAnnotations({
       ...currentProject,
       annotations: currentProject.annotations.map((annotation) =>
         annotation.id === id ? moveAnnotation(annotation, deltaX, deltaY) : annotation,
       ),
       updatedAt: Date.now(),
-    });
+    }));
     setSelectedId(id);
     scheduleKeyboardNudgeCommit();
     setStatus(`Nudged layer ${eventNudgeLabel(deltaX, deltaY)}.`);
@@ -1461,6 +1701,10 @@ export const ImageEditor = () => {
         setIsShortcutsOpen(false);
         return;
       }
+      if (draft()?.type === "crop") {
+        cancelCropDraft();
+        return;
+      }
       batch(() => {
         setDraft(undefined);
         setInteraction(undefined);
@@ -1504,6 +1748,12 @@ export const ImageEditor = () => {
     if (!isPrimaryModifier && !event.altKey && event.key === "[") {
       event.preventDefault();
       adjustStrokeWidth(-1);
+      return;
+    }
+
+    if (event.key === "Enter" && draft()?.type === "crop") {
+      event.preventDefault();
+      applyCropDraft();
       return;
     }
 
@@ -1634,6 +1884,8 @@ export const ImageEditor = () => {
           onBringForward={bringSelectedForward}
           onSendBackward={sendSelectedBackward}
           onDeleteSelected={deleteSelected}
+          onApplyCrop={applyCropDraft}
+          onCancelCrop={cancelCropDraft}
           onPointerDown={handlePointerDown}
           onPointerMove={handlePointerMove}
           onPointerUp={handlePointerUp}
@@ -1893,6 +2145,34 @@ const findHitAnnotation = (
   return undefined;
 };
 
+const getClipboardImageFiles = (clipboardData: DataTransfer): File[] => {
+  const files = Array.from(clipboardData.files).filter((file) =>
+    file.type.startsWith("image/"),
+  );
+
+  for (const item of Array.from(clipboardData.items)) {
+    if (item.kind !== "file" || !item.type.startsWith("image/")) {
+      continue;
+    }
+
+    const file = item.getAsFile();
+
+    if (!file || files.some((candidate) => isSameClipboardFile(candidate, file))) {
+      continue;
+    }
+
+    files.push(file);
+  }
+
+  return files;
+};
+
+const isSameClipboardFile = (first: File, second: File) =>
+  first.name === second.name &&
+  first.size === second.size &&
+  first.type === second.type &&
+  first.lastModified === second.lastModified;
+
 const annotationTypeLabel = (annotation: ImageAnnotation | EditorDraft) =>
   annotation.type === "crop"
     ? toolLabels.crop
@@ -1902,9 +2182,52 @@ const annotationTypeLabel = (annotation: ImageAnnotation | EditorDraft) =>
 
 const expandProjectToAnnotations = (
   project: ImageEditorProject,
-): ImageEditorProject => {
+): ImageEditorProject => expandProjectToContent(project).project;
+
+const expandProjectForInteraction = (
+  project: ImageEditorProject,
+  interaction: MoveInteraction | ResizeInteraction,
+): { project: ImageEditorProject; interaction: MoveInteraction | ResizeInteraction } => {
+  const expansion = expandProjectToContent(project);
+
+  return {
+    project: expansion.project,
+    interaction: shiftInteraction(interaction, expansion.shift),
+  };
+};
+
+const expandProjectForDraft = (
+  project: ImageEditorProject,
+  draft: ImageAnnotation,
+  interaction: DrawingInteraction,
+): {
+  project: ImageEditorProject;
+  draft: ImageAnnotation;
+  interaction: DrawingInteraction;
+} => {
+  const expansion = expandProjectToContent(project, [draft]);
+
+  if (expansion.shift.x === 0 && expansion.shift.y === 0) {
+    return {
+      project: expansion.project,
+      draft,
+      interaction,
+    };
+  }
+
+  return {
+    project: expansion.project,
+    draft: moveAnnotation(draft, expansion.shift.x, expansion.shift.y),
+    interaction: shiftInteraction(interaction, expansion.shift),
+  };
+};
+
+const expandProjectToContent = (
+  project: ImageEditorProject,
+  extraAnnotations: ImageAnnotation[] = [],
+): { project: ImageEditorProject; shift: Point } => {
   const padding = 24;
-  const contentBounds = project.annotations.reduce(
+  const contentBounds = [...project.annotations, ...extraAnnotations].reduce(
     (bounds, annotation) => {
       const annotationBounds = getAnnotationBounds(annotation);
 
@@ -1921,28 +2244,69 @@ const expandProjectToAnnotations = (
   const shiftY = contentBounds.minY < 0 ? Math.ceil(-contentBounds.minY) : 0;
   const width = Math.ceil(Math.max(project.width + shiftX, contentBounds.maxX + shiftX));
   const height = Math.ceil(Math.max(project.height + shiftY, contentBounds.maxY + shiftY));
+  const shift = { x: shiftX, y: shiftY };
 
   if (width === project.width && height === project.height && shiftX === 0 && shiftY === 0) {
-    return project;
+    return { project, shift };
   }
 
   return {
-    ...project,
-    width,
-    height,
-    baseImage:
-      shiftX === 0 && shiftY === 0
-        ? project.baseImage
-        : {
-            ...project.baseImage,
-            offsetX: (project.baseImage.offsetX ?? 0) + shiftX,
-            offsetY: (project.baseImage.offsetY ?? 0) + shiftY,
-          },
-    annotations:
-      shiftX === 0 && shiftY === 0
-        ? project.annotations
-        : project.annotations.map((annotation) => moveAnnotation(annotation, shiftX, shiftY)),
+    project: {
+      ...project,
+      width,
+      height,
+      baseImage:
+        shiftX === 0 && shiftY === 0
+          ? project.baseImage
+          : {
+              ...project.baseImage,
+              offsetX: (project.baseImage.offsetX ?? 0) + shiftX,
+              offsetY: (project.baseImage.offsetY ?? 0) + shiftY,
+            },
+      annotations:
+        shiftX === 0 && shiftY === 0
+          ? project.annotations
+          : project.annotations.map((annotation) => moveAnnotation(annotation, shiftX, shiftY)),
+    },
+    shift,
   };
+};
+
+const shiftInteraction = <T extends EditorInteraction>(
+  interaction: T,
+  shift: Point,
+): T => {
+  if (shift.x === 0 && shift.y === 0) {
+    return interaction;
+  }
+
+  switch (interaction.type) {
+    case "draw":
+      return {
+        ...interaction,
+        start: movePoint(interaction.start, shift.x, shift.y),
+      } as T;
+    case "move":
+      return {
+        ...interaction,
+        start: movePoint(interaction.start, shift.x, shift.y),
+        originalAnnotations: interaction.originalAnnotations.map((annotation) =>
+          moveAnnotation(annotation, shift.x, shift.y),
+        ),
+      } as T;
+    case "resize":
+      return {
+        ...interaction,
+        start: movePoint(interaction.start, shift.x, shift.y),
+        initialBounds: moveBounds(interaction.initialBounds, shift.x, shift.y),
+        originalAnnotations: interaction.originalAnnotations.map((annotation) =>
+          moveAnnotation(annotation, shift.x, shift.y),
+        ),
+      } as T;
+    case "crop-move":
+    case "crop-resize":
+      return interaction;
+  }
 };
 
 const applySettingsToAnnotation = (
@@ -2106,6 +2470,48 @@ const isEditableTarget = (target: EventTarget | null) => {
     target instanceof HTMLSelectElement
   );
 };
+
+const createCropDraftFromBounds = (bounds: Bounds): CropDraft => ({
+  id: createEditorId("crop"),
+  type: "crop",
+  x: bounds.x,
+  y: bounds.y,
+  width: bounds.width,
+  height: bounds.height,
+});
+
+const clampMovableBoundsToProject = (
+  bounds: Bounds,
+  project: Pick<ImageEditorProject, "width" | "height">,
+): Bounds => {
+  const width = Math.min(bounds.width, project.width);
+  const height = Math.min(bounds.height, project.height);
+
+  return {
+    x: Math.max(0, Math.min(bounds.x, project.width - width)),
+    y: Math.max(0, Math.min(bounds.y, project.height - height)),
+    width,
+    height,
+  };
+};
+
+const moveBounds = (bounds: Bounds, deltaX: number, deltaY: number): Bounds => ({
+  x: bounds.x + deltaX,
+  y: bounds.y + deltaY,
+  width: bounds.width,
+  height: bounds.height,
+});
+
+const movePoint = (point: Point, deltaX: number, deltaY: number): Point => ({
+  x: point.x + deltaX,
+  y: point.y + deltaY,
+});
+
+const isPointInBounds = (point: Point, bounds: Bounds) =>
+  point.x >= bounds.x &&
+  point.x <= bounds.x + bounds.width &&
+  point.y >= bounds.y &&
+  point.y <= bounds.y + bounds.height;
 
 const distance = (first: Point, second: Point) =>
   Math.hypot(first.x - second.x, first.y - second.y);

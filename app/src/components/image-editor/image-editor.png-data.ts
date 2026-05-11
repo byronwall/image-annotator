@@ -6,6 +6,7 @@ import {
 
 const pngSignature = [137, 80, 78, 71, 13, 10, 26, 10] as const;
 const pngDataKeyword = "PNGDATA";
+const pngDataTextPrefix = `${pngDataKeyword}:`;
 const textChunkType = "tEXt";
 const iendChunkType = "IEND";
 const encoder = new TextEncoder();
@@ -26,6 +27,21 @@ export const createPngDataPayload = (
   })),
   history,
 });
+
+export const serializePngDataPayload = (payload: ImageEditorPngPayload) =>
+  `${pngDataTextPrefix}${JSON.stringify(payload)}`;
+
+export const extractPngDataFromText = (
+  text: string,
+): ImageEditorPngPayload | undefined => {
+  const trimmed = text.trim();
+
+  if (!trimmed.startsWith(pngDataTextPrefix)) {
+    return undefined;
+  }
+
+  return parsePngPayloadText(trimmed.slice(pngDataTextPrefix.length));
+};
 
 export const appendPngDataToBlob = async (
   blob: Blob,
@@ -99,15 +115,7 @@ export const extractPngDataFromBuffer = (
 
         if (keyword === pngDataKeyword) {
           const text = decoder.decode(data.slice(separatorIndex + 1));
-          let parsed: unknown;
-
-          try {
-            parsed = JSON.parse(text) as unknown;
-          } catch {
-            return undefined;
-          }
-
-          return isPngPayload(parsed) ? parsed : undefined;
+          return parsePngPayloadText(text);
         }
       }
     }
@@ -255,3 +263,15 @@ const isProject = (value: unknown): value is ImageEditorProject => {
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null;
+
+const parsePngPayloadText = (text: string): ImageEditorPngPayload | undefined => {
+  let parsed: unknown;
+
+  try {
+    parsed = JSON.parse(text) as unknown;
+  } catch {
+    return undefined;
+  }
+
+  return isPngPayload(parsed) ? parsed : undefined;
+};

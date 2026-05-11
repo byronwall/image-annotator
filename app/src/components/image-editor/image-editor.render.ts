@@ -265,7 +265,14 @@ export const getResizeHandleAt = (
     return undefined;
   }
 
-  const handles = getResizeHandles(getAnnotationBounds(annotation));
+  return getBoundsResizeHandleAt(getAnnotationBounds(annotation), point);
+};
+
+export const getBoundsResizeHandleAt = (
+  bounds: Bounds,
+  point: Point,
+): ResizeHandle | undefined => {
+  const handles = getResizeHandles(bounds);
 
   for (const handle of handles) {
     if (
@@ -296,7 +303,7 @@ export const resizeAnnotation = (
     return annotation;
   }
 
-  const nextBounds = getResizedBounds(initialBounds, handle, point);
+  const nextBounds = resizeBounds(initialBounds, handle, point);
 
   return {
     ...annotation,
@@ -306,6 +313,12 @@ export const resizeAnnotation = (
     height: Math.max(4, nextBounds.height),
   };
 };
+
+export const resizeBounds = (
+  bounds: Bounds,
+  handle: ResizeHandle,
+  point: Point,
+): Bounds => getResizedBounds(bounds, handle, point);
 
 const drawAnnotation = (
   context: CanvasRenderingContext2D,
@@ -372,11 +385,24 @@ const drawArrow = (
   context: CanvasRenderingContext2D,
   annotation: ArrowAnnotation,
 ) => {
-  const headLength = Math.max(16, annotation.strokeWidth * 5);
+  const headLength = Math.max(14, annotation.strokeWidth * 4);
+  const headWidth = Math.max(10, annotation.strokeWidth * 3.1);
   const angle = Math.atan2(
     annotation.end.y - annotation.start.y,
     annotation.end.x - annotation.start.x,
   );
+  const shaftEnd = {
+    x: annotation.end.x - Math.cos(angle) * headLength * 0.72,
+    y: annotation.end.y - Math.sin(angle) * headLength * 0.72,
+  };
+  const baseCenter = {
+    x: annotation.end.x - Math.cos(angle) * headLength,
+    y: annotation.end.y - Math.sin(angle) * headLength,
+  };
+  const normal = {
+    x: Math.cos(angle + Math.PI / 2),
+    y: Math.sin(angle + Math.PI / 2),
+  };
 
   context.save();
   context.globalAlpha = annotation.opacity;
@@ -387,19 +413,13 @@ const drawArrow = (
   context.lineJoin = "round";
   context.beginPath();
   context.moveTo(annotation.start.x, annotation.start.y);
-  context.lineTo(annotation.end.x, annotation.end.y);
+  context.lineTo(shaftEnd.x, shaftEnd.y);
   context.stroke();
 
   context.beginPath();
   context.moveTo(annotation.end.x, annotation.end.y);
-  context.lineTo(
-    annotation.end.x - headLength * Math.cos(angle - Math.PI / 6),
-    annotation.end.y - headLength * Math.sin(angle - Math.PI / 6),
-  );
-  context.lineTo(
-    annotation.end.x - headLength * Math.cos(angle + Math.PI / 6),
-    annotation.end.y - headLength * Math.sin(angle + Math.PI / 6),
-  );
+  context.lineTo(baseCenter.x + normal.x * headWidth * 0.5, baseCenter.y + normal.y * headWidth * 0.5);
+  context.lineTo(baseCenter.x - normal.x * headWidth * 0.5, baseCenter.y - normal.y * headWidth * 0.5);
   context.closePath();
   context.fill();
   context.restore();
@@ -609,13 +629,25 @@ const drawCropDraft = (
   const bounds = normalizeRect(draft.x, draft.y, draft.width, draft.height);
 
   context.save();
-  context.fillStyle = "rgba(0, 0, 0, 0.45)";
-  context.fillRect(0, 0, context.canvas.width, context.canvas.height);
-  context.clearRect(bounds.x, bounds.y, bounds.width, bounds.height);
-  context.strokeStyle = "#ffffff";
+  context.strokeStyle = selectionColor;
   context.lineWidth = 2;
   context.setLineDash([8, 8]);
   context.strokeRect(bounds.x, bounds.y, bounds.width, bounds.height);
+  context.setLineDash([]);
+  context.fillStyle = "#ffffff";
+
+  for (const handle of getResizeHandles(bounds)) {
+    context.beginPath();
+    context.rect(
+      handle.drawBounds.x,
+      handle.drawBounds.y,
+      handle.drawBounds.width,
+      handle.drawBounds.height,
+    );
+    context.fill();
+    context.stroke();
+  }
+
   context.restore();
 };
 
@@ -868,7 +900,7 @@ const drawRoundRect = (
 };
 
 const getArrowBounds = (annotation: ArrowAnnotation): Bounds => {
-  const padding = Math.max(16, annotation.strokeWidth * 4);
+  const padding = Math.max(24, annotation.strokeWidth * 6);
   const minX = Math.min(annotation.start.x, annotation.end.x) - padding;
   const minY = Math.min(annotation.start.y, annotation.end.y) - padding;
   const maxX = Math.max(annotation.start.x, annotation.end.x) + padding;

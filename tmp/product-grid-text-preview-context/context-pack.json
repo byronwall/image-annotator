@@ -1,0 +1,85 @@
+{
+  "projectId": "image-annotation-real",
+  "rootNodeId": "page-text-preview-needs-to-match-the-styles-it-will-use-when-rendered-still-feels-like-a-random-text-box-being-rendered",
+  "nodes": [
+    {
+      "id": "page-text-preview-needs-to-match-the-styles-it-will-use-when-rendered-still-feels-like-a-random-text-box-being-rendered",
+      "title": "Text preview needs to match the styles it will use when rendered -- still feels like a random text box being rendered",
+      "status": "planned",
+      "type": "page",
+      "parentNodeId": null,
+      "titlePath": "Problems > Text preview needs to match the styles it will use when rendered -- still feels like a random text box being rendered",
+      "metadata": {},
+      "inheritedContext": {
+        "titlePath": "Problems > Text preview needs to match the styles it will use when rendered -- still feels like a random text box being rendered",
+        "metadata": [],
+        "contextBlocks": [],
+        "rawContextBlocks": [],
+        "images": [
+          {
+            "id": "75cd914b-4292-4952-819c-07c3a23be398",
+            "src": "/api/projects/image-annotation-real/images/page-text-preview-needs-to-match-the-styles-it-will-use-when-rendered-still-feels-like-a-random-text-box-being-rendered/75cd914b-4292-4952-819c-07c3a23be398.png",
+            "filename": "75cd914b-4292-4952-819c-07c3a23be398.png",
+            "originalName": "image.png",
+            "mimeType": "image/png",
+            "size": 9883,
+            "createdAt": "2026-05-11T19:45:48.441Z",
+            "sourceNodeId": "page-text-preview-needs-to-match-the-styles-it-will-use-when-rendered-still-feels-like-a-random-text-box-being-rendered",
+            "sourceTitle": "Text preview needs to match the styles it will use when rendered -- still feels like a random text box being rendered"
+          },
+          {
+            "id": "2aec8a1b-118b-494a-a3a3-1b1c28c074a7",
+            "src": "/api/projects/image-annotation-real/images/page-text-preview-needs-to-match-the-styles-it-will-use-when-rendered-still-feels-like-a-random-text-box-being-rendered/2aec8a1b-118b-494a-a3a3-1b1c28c074a7.png",
+            "filename": "2aec8a1b-118b-494a-a3a3-1b1c28c074a7.png",
+            "originalName": "image.png",
+            "mimeType": "image/png",
+            "size": 7847,
+            "createdAt": "2026-05-11T19:45:57.948Z",
+            "sourceNodeId": "page-text-preview-needs-to-match-the-styles-it-will-use-when-rendered-still-feels-like-a-random-text-box-being-rendered",
+            "sourceTitle": "Text preview needs to match the styles it will use when rendered -- still feels like a random text box being rendered"
+          }
+        ],
+        "hasDirectContext": true,
+        "hasInheritedContext": false,
+        "missingContext": false
+      },
+      "path": [
+        {
+          "id": "page-problems",
+          "title": "Problems",
+          "status": "planned",
+          "type": "page",
+          "metadata": {},
+          "imageCount": 0
+        },
+        {
+          "id": "page-text-preview-needs-to-match-the-styles-it-will-use-when-rendered-still-feels-like-a-random-text-box-being-rendered",
+          "title": "Text preview needs to match the styles it will use when rendered -- still feels like a random text box being rendered",
+          "status": "planned",
+          "type": "page",
+          "metadata": {},
+          "imageCount": 2
+        }
+      ]
+    }
+  ],
+  "images": {
+    "downloaded": [
+      {
+        "nodeId": "page-text-preview-needs-to-match-the-styles-it-will-use-when-rendered-still-feels-like-a-random-text-box-being-rendered",
+        "imageId": "75cd914b-4292-4952-819c-07c3a23be398",
+        "originalName": "image.png",
+        "src": "/api/projects/image-annotation-real/images/page-text-preview-needs-to-match-the-styles-it-will-use-when-rendered-still-feels-like-a-random-text-box-being-rendered/75cd914b-4292-4952-819c-07c3a23be398.png",
+        "path": "/Users/byronwall/Projects/image-annotator/tmp/product-grid-text-preview-context/images/page-text-preview-needs-to-match-the-styles-it-will-use-when-rendered-still-feels-like-a-random-text-box-being-rendered-75cd914b-4292-4952-819c-07c3a23be398.png"
+      },
+      {
+        "nodeId": "page-text-preview-needs-to-match-the-styles-it-will-use-when-rendered-still-feels-like-a-random-text-box-being-rendered",
+        "imageId": "2aec8a1b-118b-494a-a3a3-1b1c28c074a7",
+        "originalName": "image.png",
+        "src": "/api/projects/image-annotation-real/images/page-text-preview-needs-to-match-the-styles-it-will-use-when-rendered-still-feels-like-a-random-text-box-being-rendered/2aec8a1b-118b-494a-a3a3-1b1c28c074a7.png",
+        "path": "/Users/byronwall/Projects/image-annotator/tmp/product-grid-text-preview-context/images/page-text-preview-needs-to-match-the-styles-it-will-use-when-rendered-still-feels-like-a-random-text-box-being-rendered-2aec8a1b-118b-494a-a3a3-1b1c28c074a7.png"
+      }
+    ],
+    "failed": []
+  }
+}

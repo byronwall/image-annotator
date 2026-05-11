@@ -1,4 +1,4 @@
-import { ImagePlus } from "lucide-solid";
+import { Check, ImagePlus, X } from "lucide-solid";
 import { createEffect, createMemo, createSignal, onCleanup, onMount, Show } from "solid-js";
 import type { JSX } from "solid-js";
 import { Box, HStack, VStack } from "styled-system/jsx";
@@ -12,6 +12,7 @@ import {
 import {
   getAnnotationBounds,
   getBaseImageOffset,
+  getBoundsResizeHandleAt,
   getResizeHandleAt,
   hitTestAnnotation,
   loadImageElement,
@@ -57,6 +58,8 @@ export type ImageEditorCanvasProps = {
   onBringForward: () => void;
   onSendBackward: () => void;
   onDeleteSelected: () => void;
+  onApplyCrop: () => void;
+  onCancelCrop: () => void;
   onPointerDown: (point: Point, event: PointerEvent) => void;
   onPointerMove: (point: Point, event: PointerEvent) => void;
   onPointerUp: (point: Point, event: PointerEvent) => void;
@@ -125,6 +128,21 @@ export const ImageEditorCanvas = (props: ImageEditorCanvasProps) => {
     }
 
     return project.annotations.filter((annotation) => annotation.id !== editingId);
+  });
+
+  const cropDraftBounds = createMemo(() => {
+    const currentDraft = props.draft;
+
+    if (currentDraft?.type !== "crop") {
+      return undefined;
+    }
+
+    return normalizeDraftRect(
+      currentDraft.x,
+      currentDraft.y,
+      currentDraft.width,
+      currentDraft.height,
+    );
   });
 
   createEffect(() => {
@@ -559,11 +577,28 @@ export const ImageEditorCanvas = (props: ImageEditorCanvasProps) => {
     const selectedAnnotation = props.selectedAnnotation;
     const point = pointerPoint();
 
-    if (!selectedAnnotation || selectedAnnotation.hidden || !point) {
+    if (!point) {
+      return undefined;
+    }
+
+    const cropBounds = cropDraftBounds();
+
+    if (props.activeTool === "crop" && cropBounds) {
+      return getBoundsResizeHandleAt(cropBounds, point);
+    }
+
+    if (!selectedAnnotation || selectedAnnotation.hidden) {
       return undefined;
     }
 
     return getResizeHandleAt(selectedAnnotation, point);
+  });
+
+  const hasCropDraftHover = createMemo(() => {
+    const point = pointerPoint();
+    const cropBounds = cropDraftBounds();
+
+    return point && cropBounds ? isPointInBounds(point, cropBounds) : false;
   });
 
   const canvasStyle = createMemo<JSX.CSSProperties>(() => {
@@ -583,7 +618,7 @@ export const ImageEditorCanvas = (props: ImageEditorCanvasProps) => {
           isSpacePanning(),
           panDrag() !== undefined,
           hoverResizeHandle(),
-          sameToolHoverAnnotation() !== undefined,
+          sameToolHoverAnnotation() !== undefined || hasCropDraftHover(),
         ),
         "touch-action": "none",
       };
@@ -602,7 +637,7 @@ export const ImageEditorCanvas = (props: ImageEditorCanvasProps) => {
         isSpacePanning(),
         panDrag() !== undefined,
         hoverResizeHandle(),
-        sameToolHoverAnnotation() !== undefined,
+        sameToolHoverAnnotation() !== undefined || hasCropDraftHover(),
       ),
       "touch-action": "none",
     };
@@ -723,7 +758,7 @@ export const ImageEditorCanvas = (props: ImageEditorCanvasProps) => {
               p={{ base: "3", md: "6" }}
               maxW="full"
               maxH="full"
-              overflow="auto"
+              overflow="hidden"
               onWheel={handleWheel}
               style={{
                 "background-image":
@@ -804,6 +839,47 @@ export const ImageEditorCanvas = (props: ImageEditorCanvasProps) => {
                 onSendBackward={props.onSendBackward}
                 onDeleteSelected={props.onDeleteSelected}
               />
+            </Show>
+
+            <Show when={cropDraftBounds()}>
+              {(bounds) => (
+                <HStack
+                  position="absolute"
+                  left="50%"
+                  top="12"
+                  transform="translateX(-50%)"
+                  zIndex="10"
+                  gap="2"
+                  px="2"
+                  py="2"
+                  borderRadius="l2"
+                  bg="bg.default"
+                  borderWidth="1px"
+                  borderColor="border"
+                  boxShadow="md"
+                >
+                  <Text color="fg.muted" textStyle="xs" px="1">
+                    {Math.round(bounds().width)} x {Math.round(bounds().height)}
+                  </Text>
+                  <Button
+                    size="xs"
+                    colorPalette="blue"
+                    onClick={props.onApplyCrop}
+                  >
+                    <Check size={16} />
+                    Apply crop
+                  </Button>
+                  <Button
+                    size="xs"
+                    variant="plain"
+                    colorPalette="gray"
+                    onClick={props.onCancelCrop}
+                  >
+                    <X size={16} />
+                    Cancel
+                  </Button>
+                </HStack>
+              )}
             </Show>
 
             <InlineAnnotationEditor
@@ -945,6 +1021,12 @@ const normalizeDraftRect = (
   width: Math.abs(width),
   height: Math.abs(height),
 });
+
+const isPointInBounds = (point: Point, bounds: Bounds) =>
+  point.x >= bounds.x &&
+  point.x <= bounds.x + bounds.width &&
+  point.y >= bounds.y &&
+  point.y <= bounds.y + bounds.height;
 
 const isEditableTarget = (target: EventTarget | null) => {
   if (!(target instanceof HTMLElement)) {
