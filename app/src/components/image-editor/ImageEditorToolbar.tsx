@@ -8,6 +8,7 @@ import {
   Highlighter,
   History,
   ListOrdered,
+  Maximize2,
   MousePointer2,
   PenLine,
   Redo2,
@@ -15,6 +16,8 @@ import {
   Type,
   Undo2,
   Upload,
+  ZoomIn,
+  ZoomOut,
 } from "lucide-solid";
 import { For, type JSX } from "solid-js";
 import { Box, HStack } from "styled-system/jsx";
@@ -22,6 +25,7 @@ import { Button } from "~/components/ui/button";
 import { IconButton } from "~/components/ui/icon-button";
 import { Tooltip } from "~/components/ui/tooltip";
 import {
+  type ImageEditorZoom,
   type ImageEditorTool,
   toolLabels,
 } from "./image-editor.types";
@@ -60,16 +64,24 @@ export type ImageEditorToolbarProps = {
   isExporting: boolean;
   isCopying: boolean;
   isHistoryOpen: boolean;
+  zoom: ImageEditorZoom;
   onToolChange: (tool: ImageEditorTool) => void;
   onToggleHistory: () => void;
   onChooseFile: () => void;
   onUndo: () => void;
   onRedo: () => void;
+  onZoomIn: () => void;
+  onZoomOut: () => void;
+  onZoomFit: () => void;
+  onZoomReset: () => void;
   onExport: () => void;
   onCopy: () => void;
 };
 
 export const ImageEditorToolbar = (props: ImageEditorToolbarProps) => {
+  const zoomLabel = () =>
+    props.zoom === "fit" ? "Fit" : `${Math.round(props.zoom * 100)}%`;
+
   return (
     <HStack
       as="header"
@@ -120,6 +132,51 @@ export const ImageEditorToolbar = (props: ImageEditorToolbarProps) => {
       </HStack>
 
       <HStack gap="2" flexWrap="wrap" justifyContent="end">
+        <HStack gap="1">
+          <Tooltip content="Zoom out (-)">
+            <IconButton
+              aria-label="Zoom out"
+              size="sm"
+              variant="surface"
+              disabled={!props.hasProject}
+              onClick={props.onZoomOut}
+            >
+              <ZoomOut />
+            </IconButton>
+          </Tooltip>
+          <Tooltip content="Fit to screen (F)">
+            <IconButton
+              aria-label="Fit to screen"
+              size="sm"
+              variant={props.zoom === "fit" ? "solid" : "surface"}
+              colorPalette={props.zoom === "fit" ? "blue" : "gray"}
+              disabled={!props.hasProject}
+              onClick={props.onZoomFit}
+            >
+              <Maximize2 />
+            </IconButton>
+          </Tooltip>
+          <Button
+            size="sm"
+            variant="surface"
+            disabled={!props.hasProject}
+            minW="16"
+            onClick={props.onZoomReset}
+          >
+            {zoomLabel()}
+          </Button>
+          <Tooltip content="Zoom in (+)">
+            <IconButton
+              aria-label="Zoom in"
+              size="sm"
+              variant="surface"
+              disabled={!props.hasProject}
+              onClick={props.onZoomIn}
+            >
+              <ZoomIn />
+            </IconButton>
+          </Tooltip>
+        </HStack>
         <Tooltip content="Undo">
           <IconButton
             aria-label="Undo"

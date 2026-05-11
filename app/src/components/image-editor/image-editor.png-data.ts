@@ -1,5 +1,5 @@
 import {
-  type HistoryLogEntry,
+  type HistoryEntry,
   type ImageEditorPngPayload,
   type ImageEditorProject,
 } from "./image-editor.types";
@@ -13,13 +13,18 @@ const decoder = new TextDecoder();
 
 export const createPngDataPayload = (
   project: ImageEditorProject,
-  historyLog: HistoryLogEntry[],
+  history: HistoryEntry[],
 ): ImageEditorPngPayload => ({
   kind: "image-annotator.project",
   version: 1,
   exportedAt: Date.now(),
   project,
-  historyLog,
+  historyLog: history.map((entry) => ({
+    id: entry.id,
+    label: entry.label,
+    timestamp: entry.timestamp,
+  })),
+  history,
 });
 
 export const appendPngDataToBlob = async (
@@ -213,7 +218,22 @@ const isPngPayload = (value: unknown): value is ImageEditorPngPayload => {
     value.version === 1 &&
     typeof value.exportedAt === "number" &&
     isProject(project) &&
-    Array.isArray(value.historyLog)
+    Array.isArray(value.historyLog) &&
+    (value.history === undefined ||
+      (Array.isArray(value.history) && value.history.every(isHistoryEntry)))
+  );
+};
+
+const isHistoryEntry = (value: unknown): value is HistoryEntry => {
+  if (!isRecord(value)) {
+    return false;
+  }
+
+  return (
+    typeof value.id === "string" &&
+    typeof value.label === "string" &&
+    typeof value.timestamp === "number" &&
+    isProject(value.project)
   );
 };
 

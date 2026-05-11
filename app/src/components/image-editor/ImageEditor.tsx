@@ -42,6 +42,7 @@ import {
   type ImageAnnotation,
   type ImageEditorProject,
   type ImageEditorTool,
+  type ImageEditorZoom,
   type Point,
   type ResizeHandle,
   toolLabels,
@@ -88,6 +89,9 @@ export const ImageEditor = () => {
   const [isCopying, setIsCopying] = createSignal(false);
   const [isHistoryOpen, setIsHistoryOpen] = createSignal(true);
   const [status, setStatus] = createSignal("Ready for paste, drop, or import.");
+  const [zoom, setZoom] = createSignal<ImageEditorZoom>("fit");
+  const [annotationClipboard, setAnnotationClipboard] =
+    createSignal<ImageAnnotation>();
   const [inlineEditingId, setInlineEditingId] = createSignal<string>();
   const [inlineEditOriginalAnnotations, setInlineEditOriginalAnnotations] =
     createSignal<ImageAnnotation[]>();
@@ -106,6 +110,16 @@ export const ImageEditor = () => {
     }
 
     return undefined;
+  });
+  const visibleInlineEditingAnnotation = createMemo(() => {
+    const annotation = inlineEditingAnnotation();
+    const tool = activeTool();
+
+    if (!annotation || (tool !== "select" && tool !== annotation.type)) {
+      return undefined;
+    }
+
+    return annotation;
   });
   const canUndo = createMemo(() => historyIndex() > 0);
   const canRedo = createMemo(() => historyIndex() < history().length - 1);
@@ -180,6 +194,7 @@ export const ImageEditor = () => {
       setProject(snapshot);
       setHistory(nextHistory);
       setHistoryIndex(nextHistory.length - 1);
+      setStatus(label);
     });
   };
 
@@ -223,7 +238,11 @@ export const ImageEditor = () => {
       const embeddedPayload = await extractPngDataFromFile(file);
 
       if (embeddedPayload) {
-        restorePngDataProject(embeddedPayload.project, embeddedPayload.historyLog);
+        restorePngDataProject(
+          embeddedPayload.project,
+          embeddedPayload.historyLog,
+          embeddedPayload.history,
+        );
         setStatus("Opened editable PNGDATA project.");
         return;
       }
@@ -254,6 +273,7 @@ export const ImageEditor = () => {
         setInteraction(undefined);
         setInlineEditingId(undefined);
         setActiveTool("select");
+        setZoom("fit");
       });
       commitProject(nextProject, label);
       setStatus(`${label}: ${image.naturalWidth} x ${image.naturalHeight}`);
@@ -265,15 +285,21 @@ export const ImageEditor = () => {
   const restorePngDataProject = (
     restoredProject: ImageEditorProject,
     restoredLog: Array<{ id: string; label: string; timestamp: number }>,
+    restoredHistory?: HistoryEntry[],
   ) => {
     const snapshot = cloneProject({
       ...restoredProject,
       updatedAt: Date.now(),
     });
-    const logEntries = restoredLog.map((entry) => ({
-      ...entry,
-      project: cloneProject(snapshot),
-    }));
+    const logEntries =
+      restoredHistory?.map((entry) => ({
+        ...entry,
+        project: cloneProject(entry.project),
+      })) ??
+      restoredLog.map((entry) => ({
+        ...entry,
+        project: cloneProject(snapshot),
+      }));
     const openedEntry: HistoryEntry = {
       id: createEditorId("history"),
       label: "Opened PNGDATA project",
@@ -291,11 +317,32 @@ export const ImageEditor = () => {
       setInteraction(undefined);
       setInlineEditingId(undefined);
       setActiveTool("select");
+      setZoom("fit");
     });
   };
 
   const chooseFile = () => {
     fileInputRef?.click();
+  };
+
+  const handleToolChange = (tool: ImageEditorTool) => {
+    if (inlineEditingId()) {
+      commitPendingInlineEdit();
+      batch(() => {
+        setInlineEditingId(undefined);
+        setInlineEditOriginalAnnotations(undefined);
+        setHasPendingInlineEdit(false);
+      });
+    }
+
+    batch(() => {
+      if (tool !== "select") {
+        setSelectedId(undefined);
+      }
+
+      setActiveTool(tool);
+    });
+    setStatus(`${toolLabels[tool]} tool`);
   };
 
   const handleFileInput = (event: Event) => {
@@ -307,6 +354,16 @@ export const ImageEditor = () => {
 
   const handlePointerDown = (point: Point, event: PointerEvent) => {
     event.preventDefault();
+
+    if (inlineEditingId()) {
+      commitPendingInlineEdit();
+      batch(() => {
+        setInlineEditingId(undefined);
+        setInlineEditOriginalAnnotations(undefined);
+        setHasPendingInlineEdit(false);
+      });
+    }
+
     const currentProject = project();
 
     if (!currentProject) {
@@ -357,10 +414,7 @@ export const ImageEditor = () => {
         },
         "Added text",
       );
-      batch(() => {
-        setSelectedId(annotation.id);
-        setActiveTool("select");
-      });
+      setSelectedId(annotation.id);
       startInlineEditFor(annotation.id);
       return;
     }
@@ -671,13 +725,7 @@ export const ImageEditor = () => {
       const renderedBlob = await renderProjectToPngBlob(currentProject);
       const payload = createPngDataPayload(
         currentProject,
-        history()
-          .slice(0, historyIndex() + 1)
-          .map((entry) => ({
-            id: entry.id,
-            label: entry.label,
-            timestamp: entry.timestamp,
-          })),
+        history().slice(0, historyIndex() + 1),
       );
 
       return await appendPngDataToBlob(renderedBlob, payload);
@@ -696,6 +744,33 @@ export const ImageEditor = () => {
   const handleCopy = () => {
     setIsCopying(true);
     void copyPng().finally(() => setIsCopying(false));
+  };
+
+  const handleZoomChange = (nextZoom: ImageEditorZoom) => {
+    if (!project()) {
+      return;
+    }
+
+    setZoom(nextZoom);
+    setStatus(nextZoom === "fit" ? "Fit image to viewport." : `Zoom ${formatZoom(nextZoom)}.`);
+  };
+
+  const zoomIn = () => {
+    const nextZoom = clampZoom(numericZoom(zoom()) * 1.25);
+    handleZoomChange(nextZoom);
+  };
+
+  const zoomOut = () => {
+    const nextZoom = clampZoom(numericZoom(zoom()) / 1.25);
+    handleZoomChange(nextZoom);
+  };
+
+  const resetZoom = () => {
+    handleZoomChange(1);
+  };
+
+  const fitZoom = () => {
+    handleZoomChange("fit");
   };
 
   const handleSettingsChange = (patch: Partial<EditorSettings>) => {
@@ -795,7 +870,6 @@ export const ImageEditor = () => {
       setInlineEditingId(id);
       setInlineEditOriginalAnnotations(structuredClone(currentProject.annotations));
       setHasPendingInlineEdit(false);
-      setActiveTool("select");
     });
   };
 
@@ -823,6 +897,7 @@ export const ImageEditor = () => {
     const annotation = selectedAnnotation();
 
     if (!currentProject || !annotation) {
+      setStatus("Select a layer to duplicate.");
       return;
     }
 
@@ -844,6 +919,79 @@ export const ImageEditor = () => {
       "Duplicated layer",
     );
     setSelectedId(duplicate.id);
+    setStatus("Duplicated layer.");
+  };
+
+  const copySelectedAnnotation = () => {
+    const annotation = selectedAnnotation();
+
+    if (!annotation) {
+      setStatus("Select a layer to copy.");
+      return false;
+    }
+
+    setAnnotationClipboard(structuredClone(annotation));
+    setStatus("Copied layer.");
+    return true;
+  };
+
+  const cutSelectedAnnotation = () => {
+    const currentProject = project();
+    const annotation = selectedAnnotation();
+
+    if (!currentProject || !annotation) {
+      setStatus("Select a layer to cut.");
+      return false;
+    }
+
+    setAnnotationClipboard(structuredClone(annotation));
+    commitProject(
+      {
+        ...currentProject,
+        annotations: currentProject.annotations.filter(
+          (candidate) => candidate.id !== annotation.id,
+        ),
+      },
+      "Cut layer",
+    );
+    batch(() => {
+      setSelectedId(undefined);
+      setInlineEditingId(undefined);
+    });
+    setStatus("Cut layer.");
+    return true;
+  };
+
+  const pasteCopiedAnnotation = () => {
+    const currentProject = project();
+    const copiedAnnotation = annotationClipboard();
+
+    if (!currentProject || !copiedAnnotation) {
+      setStatus("No copied layer to paste.");
+      return false;
+    }
+
+    const duplicate = moveAnnotation(
+      {
+        ...structuredClone(copiedAnnotation),
+        id: createEditorId("layer"),
+        createdAt: Date.now(),
+      },
+      24,
+      24,
+    );
+
+    commitProject(
+      {
+        ...currentProject,
+        annotations: [...currentProject.annotations, duplicate],
+      },
+      "Pasted layer",
+    );
+    setSelectedId(duplicate.id);
+    setAnnotationClipboard(structuredClone(duplicate));
+    setStatus("Pasted layer.");
+    return true;
   };
 
   const bringSelectedForward = () => {
@@ -866,6 +1014,7 @@ export const ImageEditor = () => {
     const nextIndex = index + direction;
 
     if (index < 0 || nextIndex < 0 || nextIndex >= currentProject.annotations.length) {
+      setStatus(direction > 0 ? "Layer is already in front." : "Layer is already behind.");
       return;
     }
 
@@ -885,6 +1034,7 @@ export const ImageEditor = () => {
       label,
     );
     setSelectedId(id);
+    setStatus(label);
   };
 
   const handleDoubleClick = (point: Point) => {
@@ -921,14 +1071,49 @@ export const ImageEditor = () => {
     setSelectedId(id);
   };
 
+  const cycleSelectedLayer = (direction: -1 | 1) => {
+    const currentProject = project();
+
+    if (!currentProject || currentProject.annotations.length === 0) {
+      return;
+    }
+
+    const annotations = currentProject.annotations;
+    const selectedIndex = annotations.findIndex(
+      (annotation) => annotation.id === selectedId(),
+    );
+    const startIndex = selectedIndex < 0 ? (direction > 0 ? -1 : 0) : selectedIndex;
+    const nextIndex =
+      (startIndex + direction + annotations.length) % annotations.length;
+    const nextAnnotation = annotations[nextIndex];
+
+    if (!nextAnnotation) {
+      return;
+    }
+
+    batch(() => {
+      setSelectedId(nextAnnotation.id);
+      setInlineEditingId(undefined);
+      setActiveTool("select");
+    });
+    setStatus(`Selected ${toolLabels[nextAnnotation.type]} layer.`);
+  };
+
+  const adjustStrokeWidth = (delta: number) => {
+    const nextStrokeWidth = Math.max(1, Math.min(36, settings().strokeWidth + delta));
+    handleSettingsChange({ strokeWidth: nextStrokeWidth });
+    setStatus(`Stroke ${nextStrokeWidth}px.`);
+  };
+
   const handleKeyboardShortcut = (event: KeyboardEvent) => {
     if (isEditableTarget(event.target)) {
       return;
     }
 
     const isPrimaryModifier = event.metaKey || event.ctrlKey;
+    const key = event.key.toLowerCase();
 
-    if (isPrimaryModifier && event.key.toLowerCase() === "z") {
+    if (isPrimaryModifier && key === "z") {
       event.preventDefault();
 
       if (event.shiftKey) {
@@ -939,15 +1124,73 @@ export const ImageEditor = () => {
       return;
     }
 
-    if (isPrimaryModifier && event.key.toLowerCase() === "y") {
+    if (isPrimaryModifier && key === "y") {
       event.preventDefault();
       restoreHistoryEntry(historyIndex() + 1);
       return;
     }
 
-    if (isPrimaryModifier && event.shiftKey && event.key.toLowerCase() === "c") {
+    if (isPrimaryModifier && event.shiftKey && key === "c") {
       event.preventDefault();
       handleCopy();
+      return;
+    }
+
+    if (isPrimaryModifier && key === "c") {
+      event.preventDefault();
+
+      if (!copySelectedAnnotation()) {
+        handleCopy();
+      }
+
+      return;
+    }
+
+    if (isPrimaryModifier && key === "x") {
+      if (selectedId()) {
+        event.preventDefault();
+        cutSelectedAnnotation();
+      }
+
+      return;
+    }
+
+    if (isPrimaryModifier && key === "v") {
+      if (annotationClipboard()) {
+        event.preventDefault();
+        pasteCopiedAnnotation();
+      }
+
+      return;
+    }
+
+    if (isPrimaryModifier && key === "d") {
+      event.preventDefault();
+      duplicateSelected();
+      return;
+    }
+
+    if (isPrimaryModifier && (key === "s" || key === "e")) {
+      event.preventDefault();
+      handleExport();
+      return;
+    }
+
+    if (isPrimaryModifier && event.key === "]") {
+      event.preventDefault();
+      bringSelectedForward();
+      return;
+    }
+
+    if (isPrimaryModifier && event.key === "[") {
+      event.preventDefault();
+      sendSelectedBackward();
+      return;
+    }
+
+    if (isPrimaryModifier && key === "0") {
+      event.preventDefault();
+      resetZoom();
       return;
     }
 
@@ -956,6 +1199,12 @@ export const ImageEditor = () => {
         event.preventDefault();
         deleteSelected();
       }
+      return;
+    }
+
+    if (event.key === "Tab" && project()?.annotations.length) {
+      event.preventDefault();
+      cycleSelectedLayer(event.shiftKey ? -1 : 1);
       return;
     }
 
@@ -968,6 +1217,36 @@ export const ImageEditor = () => {
         setSelectedId(undefined);
         setActiveTool("select");
       });
+      return;
+    }
+
+    if (!isPrimaryModifier && !event.altKey && (event.key === "+" || event.key === "=")) {
+      event.preventDefault();
+      zoomIn();
+      return;
+    }
+
+    if (!isPrimaryModifier && !event.altKey && event.key === "-") {
+      event.preventDefault();
+      zoomOut();
+      return;
+    }
+
+    if (!isPrimaryModifier && !event.altKey && key === "f") {
+      event.preventDefault();
+      fitZoom();
+      return;
+    }
+
+    if (!isPrimaryModifier && !event.altKey && event.key === "]") {
+      event.preventDefault();
+      adjustStrokeWidth(1);
+      return;
+    }
+
+    if (!isPrimaryModifier && !event.altKey && event.key === "[") {
+      event.preventDefault();
+      adjustStrokeWidth(-1);
       return;
     }
 
@@ -996,8 +1275,9 @@ export const ImageEditor = () => {
 
     if (shortcutTool && !event.metaKey && !event.ctrlKey && !event.altKey) {
       event.preventDefault();
-      setActiveTool(shortcutTool);
-      setStatus(`${toolLabels[shortcutTool]} tool`);
+      if (project() || shortcutTool === "select") {
+        handleToolChange(shortcutTool);
+      }
     }
   };
 
@@ -1026,11 +1306,16 @@ export const ImageEditor = () => {
         isExporting={isExporting()}
         isCopying={isCopying()}
         isHistoryOpen={isHistoryOpen()}
-        onToolChange={setActiveTool}
+        zoom={zoom()}
+        onToolChange={handleToolChange}
         onToggleHistory={() => setIsHistoryOpen((value) => !value)}
         onChooseFile={chooseFile}
         onUndo={() => restoreHistoryEntry(historyIndex() - 1)}
         onRedo={() => restoreHistoryEntry(historyIndex() + 1)}
+        onZoomIn={zoomIn}
+        onZoomOut={zoomOut}
+        onZoomFit={fitZoom}
+        onZoomReset={resetZoom}
         onExport={handleExport}
         onCopy={handleCopy}
       />
@@ -1051,11 +1336,13 @@ export const ImageEditor = () => {
           draft={draft()}
           selectedId={selectedId()}
           selectedAnnotation={selectedAnnotation()}
-          inlineEditingAnnotation={inlineEditingAnnotation()}
+          inlineEditingAnnotation={visibleInlineEditingAnnotation()}
           activeTool={activeTool()}
+          zoom={zoom()}
           settings={settings()}
           onChooseFile={chooseFile}
           onFiles={(files) => void importFiles(files, "Dropped image")}
+          onZoomChange={handleZoomChange}
           onSettingsChange={handleSettingsChange}
           onStartInlineEdit={startInlineEdit}
           onInlineEditChange={(id, value) =>
@@ -1437,6 +1724,12 @@ const intersects = (first: Bounds, second: Bounds) =>
   first.x + first.width > second.x &&
   first.y < second.y + second.height &&
   first.y + first.height > second.y;
+
+const clampZoom = (zoom: number) => Math.max(0.1, Math.min(5, zoom));
+
+const numericZoom = (zoom: ImageEditorZoom) => (zoom === "fit" ? 1 : zoom);
+
+const formatZoom = (zoom: number) => `${Math.round(zoom * 100)}%`;
 
 const downloadBaseName = (name: string) => {
   const withoutExtension = name.replace(/\.[^.]+$/, "");

@@ -21,6 +21,7 @@ import {
   type ImageAnnotation,
   type ImageEditorProject,
   type ImageEditorTool,
+  type ImageEditorZoom,
   type Point,
 } from "./image-editor.types";
 
@@ -41,9 +42,11 @@ export type ImageEditorCanvasProps = {
   selectedAnnotation: ImageAnnotation | undefined;
   inlineEditingAnnotation: EditableAnnotation | undefined;
   activeTool: ImageEditorTool;
+  zoom: ImageEditorZoom;
   settings: EditorSettings;
   onChooseFile: () => void;
   onFiles: (files: File[]) => void;
+  onZoomChange: (zoom: ImageEditorZoom) => void;
   onSettingsChange: (settings: Partial<EditorSettings>) => void;
   onStartInlineEdit: () => void;
   onInlineEditChange: (id: string, value: string) => void;
@@ -74,6 +77,8 @@ export const ImageEditorCanvas = (props: ImageEditorCanvasProps) => {
   let canvasRef: HTMLCanvasElement | undefined;
   const [baseImage, setBaseImage] = createSignal<HTMLImageElement>();
   const [canvasFrame, setCanvasFrame] = createSignal<CanvasFrame>();
+  const [isDragActive, setIsDragActive] = createSignal(false);
+  const [pointerPoint, setPointerPoint] = createSignal<Point>();
 
   createEffect(() => {
     const dataUrl = props.project?.baseImage.dataUrl;
@@ -152,11 +157,24 @@ export const ImageEditorCanvas = (props: ImageEditorCanvasProps) => {
 
   const handleDrop = (event: DragEvent) => {
     event.preventDefault();
+    setIsDragActive(false);
     const files = Array.from(event.dataTransfer?.files ?? []);
 
     if (files.length > 0) {
       props.onFiles(files);
     }
+  };
+
+  const handleWheel = (event: WheelEvent) => {
+    if (!props.project || (!event.metaKey && !event.ctrlKey)) {
+      return;
+    }
+
+    event.preventDefault();
+    const currentZoom =
+      props.zoom === "fit" ? canvasFrame()?.scaleX ?? 1 : props.zoom;
+    const multiplier = event.deltaY < 0 ? 1.12 : 0.88;
+    props.onZoomChange(clampZoom(currentZoom * multiplier));
   };
 
   const pointFromEvent = (event: CanvasCoordinateEvent): Point => {
@@ -211,10 +229,12 @@ export const ImageEditorCanvas = (props: ImageEditorCanvasProps) => {
     }
 
     if (!selectedAnnotation) {
+      const top = Math.max(12, frame.top - 10);
+
       return {
         left: `${frame.left + frame.width / 2}px`,
-        top: `${frame.top + frame.height - 12}px`,
-        transform: "translate(-50%, -100%)",
+        top: `${top}px`,
+        transform: top <= 14 ? "translateX(-50%)" : "translate(-50%, -100%)",
       };
     }
 
@@ -255,6 +275,61 @@ export const ImageEditorCanvas = (props: ImageEditorCanvasProps) => {
     };
   });
 
+  const canvasStyle = createMemo<JSX.CSSProperties>(() => {
+    const project = props.project;
+    const width = project ? `${project.width * numericZoom(props.zoom)}px` : undefined;
+    const height = project ? `${project.height * numericZoom(props.zoom)}px` : undefined;
+
+    if (props.zoom === "fit") {
+      return {
+        display: "block",
+        "max-width": "100%",
+        "max-height": "calc(100dvh - 172px)",
+        "box-shadow": "0 20px 80px rgba(15, 23, 42, 0.22)",
+        cursor: canvasCursor(props.activeTool, props.selectedAnnotation !== undefined),
+        "touch-action": "none",
+      };
+    }
+
+    return {
+      display: "block",
+      width,
+      height,
+      "max-width": "none",
+      "max-height": "none",
+      "box-shadow": "0 20px 80px rgba(15, 23, 42, 0.22)",
+      cursor: canvasCursor(props.activeTool, props.selectedAnnotation !== undefined),
+      "touch-action": "none",
+    };
+  });
+
+  const draftReadout = createMemo(() => {
+    const currentDraft = props.draft;
+
+    if (!currentDraft) {
+      return undefined;
+    }
+
+    if (currentDraft.type === "crop" || currentDraft.type === "rectangle" || currentDraft.type === "ellipse" || currentDraft.type === "pixelate") {
+      const bounds = normalizeDraftRect(currentDraft.x, currentDraft.y, currentDraft.width, currentDraft.height);
+      return `${Math.round(bounds.width)} x ${Math.round(bounds.height)}`;
+    }
+
+    if (currentDraft.type === "arrow") {
+      const length = Math.hypot(
+        currentDraft.end.x - currentDraft.start.x,
+        currentDraft.end.y - currentDraft.start.y,
+      );
+      return `${Math.round(length)} px`;
+    }
+
+    if (currentDraft.type === "pen" || currentDraft.type === "highlighter") {
+      return `${currentDraft.points.length} pts`;
+    }
+
+    return undefined;
+  });
+
   return (
     <Box
       ref={hostRef}
@@ -267,8 +342,16 @@ export const ImageEditorCanvas = (props: ImageEditorCanvasProps) => {
       overflow="hidden"
       bg="bg.subtle"
       borderWidth="1px"
-      borderColor="border"
-      onDragOver={(event) => event.preventDefault()}
+      borderColor={isDragActive() ? "blue.8" : "border"}
+      onDragEnter={(event) => {
+        event.preventDefault();
+        setIsDragActive(true);
+      }}
+      onDragOver={(event) => {
+        event.preventDefault();
+        setIsDragActive(true);
+      }}
+      onDragLeave={() => setIsDragActive(false)}
       onDrop={handleDrop}
     >
       <Show
@@ -315,6 +398,13 @@ export const ImageEditorCanvas = (props: ImageEditorCanvasProps) => {
               maxW="full"
               maxH="full"
               overflow="auto"
+              onWheel={handleWheel}
+              style={{
+                "background-image":
+                  "linear-gradient(45deg, rgba(148, 163, 184, 0.16) 25%, transparent 25%), linear-gradient(-45deg, rgba(148, 163, 184, 0.16) 25%, transparent 25%), linear-gradient(45deg, transparent 75%, rgba(148, 163, 184, 0.16) 75%), linear-gradient(-45deg, transparent 75%, rgba(148, 163, 184, 0.16) 75%)",
+                "background-size": "24px 24px",
+                "background-position": "0 0, 0 12px, 12px -12px, -12px 0px",
+              }}
             >
               <canvas
                 ref={canvasRef}
@@ -322,26 +412,51 @@ export const ImageEditorCanvas = (props: ImageEditorCanvasProps) => {
                 data-active-tool={props.activeTool}
                 onPointerDown={(event) => {
                   event.currentTarget.setPointerCapture(event.pointerId);
-                  props.onPointerDown(pointFromEvent(event), event);
+                  const point = pointFromEvent(event);
+                  setPointerPoint(point);
+                  props.onPointerDown(point, event);
                 }}
-                onPointerMove={(event) => props.onPointerMove(pointFromEvent(event), event)}
+                onPointerMove={(event) => {
+                  const point = pointFromEvent(event);
+                  setPointerPoint(point);
+                  props.onPointerMove(point, event);
+                }}
                 onPointerUp={(event) => {
                   event.currentTarget.releasePointerCapture(event.pointerId);
-                  props.onPointerUp(pointFromEvent(event), event);
+                  const point = pointFromEvent(event);
+                  setPointerPoint(point);
+                  props.onPointerUp(point, event);
                 }}
+                onPointerLeave={() => setPointerPoint(undefined)}
                 onDblClick={(event) => props.onDoubleClick(pointFromEvent(event), event)}
-                style={{
-                  display: "block",
-                  "max-width": "100%",
-                  "max-height": "calc(100dvh - 172px)",
-                  "box-shadow": "0 20px 80px rgba(15, 23, 42, 0.22)",
-                  cursor: props.activeTool === "select" ? "default" : "crosshair",
-                  "touch-action": "none",
-                }}
+                style={canvasStyle()}
                 width={project().width}
                 height={project().height}
               />
             </Box>
+
+            <Show when={isDragActive()}>
+              <VStack
+                position="absolute"
+                inset="4"
+                zIndex="8"
+                pointerEvents="none"
+                alignItems="center"
+                justifyContent="center"
+                borderWidth="2px"
+                borderStyle="dashed"
+                borderColor="blue.8"
+                borderRadius="l3"
+                bg="rgba(255, 255, 255, 0.72)"
+                color="fg.default"
+                gap="1"
+              >
+                <Box fontWeight="semibold">Drop to replace the working image</Box>
+                <Text color="fg.muted" textStyle="sm">
+                  Editable PNGDATA projects reopen with their layers.
+                </Text>
+              </VStack>
+            </Show>
 
             <Show when={shouldShowContextBar()}>
               <ImageEditorContextBar
@@ -384,6 +499,24 @@ export const ImageEditorCanvas = (props: ImageEditorCanvasProps) => {
               <Box>{project().width} x {project().height}</Box>
               <Box color="fg.subtle">/</Box>
               <Box>{project().annotations.length} layers</Box>
+              <Show when={pointerPoint()}>
+                {(point) => (
+                  <>
+                    <Box color="fg.subtle">/</Box>
+                    <Box>
+                      {Math.round(point().x)}, {Math.round(point().y)}
+                    </Box>
+                  </>
+                )}
+              </Show>
+              <Show when={draftReadout()}>
+                {(readout) => (
+                  <>
+                    <Box color="fg.subtle">/</Box>
+                    <Box>{readout()}</Box>
+                  </>
+                )}
+              </Show>
             </HStack>
           </>
         )}
@@ -397,4 +530,28 @@ const projectBoundsToFrame = (bounds: Bounds, frame: CanvasFrame): Bounds => ({
   y: frame.top + bounds.y * frame.scaleY,
   width: bounds.width * frame.scaleX,
   height: bounds.height * frame.scaleY,
+});
+
+const clampZoom = (zoom: number) => Math.max(0.1, Math.min(5, zoom));
+
+const numericZoom = (zoom: ImageEditorZoom) => (zoom === "fit" ? 1 : zoom);
+
+const canvasCursor = (tool: ImageEditorTool, hasSelection: boolean) => {
+  if (tool !== "select") {
+    return "crosshair";
+  }
+
+  return hasSelection ? "grab" : "default";
+};
+
+const normalizeDraftRect = (
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+): Bounds => ({
+  x: width < 0 ? x + width : x,
+  y: height < 0 ? y + height : y,
+  width: Math.abs(width),
+  height: Math.abs(height),
 });

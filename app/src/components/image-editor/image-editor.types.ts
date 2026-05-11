@@ -15,6 +15,8 @@ export type ImageEditorTool =
   | "pixelate"
   | "crop";
 
+export type ImageEditorZoom = "fit" | number;
+
 export type ResizeHandle = "nw" | "ne" | "sw" | "se";
 
 export const toolLabels: Record<ImageEditorTool, string> = {
@@ -142,6 +144,7 @@ export type ImageEditorPngPayload = {
   exportedAt: number;
   project: ImageEditorProject;
   historyLog: HistoryLogEntry[];
+  history?: HistoryEntry[];
 };
 
 export const defaultEditorSettings: EditorSettings = {
