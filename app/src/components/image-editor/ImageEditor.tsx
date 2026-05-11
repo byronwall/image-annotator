@@ -36,6 +36,8 @@ import {
   cloneProject,
   createEditorId,
   defaultEditorSettings,
+  toolLabels,
+  toolMatchesAnnotation,
   type CropDraft,
   type EditorDraft,
   type EditorSettings,
@@ -46,7 +48,6 @@ import {
   type ImageEditorZoom,
   type Point,
   type ResizeHandle,
-  toolLabels,
 } from "./image-editor.types";
 
 type DrawingInteraction = {
@@ -466,28 +467,28 @@ export const ImageEditor = () => {
       return;
     }
 
-    if (tool === "text") {
-      const hitText = findHitAnnotation(
-        currentProject.annotations,
-        point,
-        (annotation) => annotation.type === "text",
-      );
+    const sameToolHit = findHitAnnotation(
+      currentProject.annotations,
+      point,
+      (annotation) => toolMatchesAnnotation(tool, annotation),
+    );
 
-      if (hitText) {
-        batch(() => {
-          setSelectedId(hitText.id);
-          setInlineEditingId(undefined);
-          setInteraction({
-            type: "move",
-            annotationId: hitText.id,
-            start: point,
-            originalAnnotations: structuredClone(currentProject.annotations),
-          });
+    if (sameToolHit) {
+      batch(() => {
+        setSelectedId(sameToolHit.id);
+        setInlineEditingId(undefined);
+        setInteraction({
+          type: "move",
+          annotationId: sameToolHit.id,
+          start: point,
+          originalAnnotations: structuredClone(currentProject.annotations),
         });
-        setStatus("Selected text layer.");
-        return;
-      }
+      });
+      setStatus(`Selected ${annotationTypeLabel(sameToolHit)} layer.`);
+      return;
+    }
 
+    if (tool === "text") {
       const annotation = createTextAnnotation(point, settings());
       commitProject(
         {

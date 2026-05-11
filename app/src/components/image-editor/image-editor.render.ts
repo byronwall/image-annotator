@@ -68,6 +68,7 @@ export const renderImageEditorCanvas = (
   draft: EditorDraft | undefined,
   selectedId: string | undefined,
   baseImageOffset: Point = { x: 0, y: 0 },
+  hoveredId: string | undefined = undefined,
 ) => {
   const context = canvas.getContext("2d");
 
@@ -100,6 +101,13 @@ export const renderImageEditorCanvas = (
       drawCropDraft(context, draft);
     } else {
       drawAnnotation(context, draft);
+    }
+  }
+
+  if (hoveredId && hoveredId !== selectedId) {
+    const hovered = annotations.find((annotation) => annotation.id === hoveredId);
+    if (hovered && !hovered.hidden) {
+      drawHover(context, getAnnotationBounds(hovered));
     }
   }
 
@@ -628,6 +636,17 @@ const drawSelection = (
     }
   }
 
+  context.restore();
+};
+
+const drawHover = (context: CanvasRenderingContext2D, bounds: Bounds) => {
+  context.save();
+  context.shadowColor = "rgba(14, 165, 233, 0.45)";
+  context.shadowBlur = 18;
+  context.strokeStyle = "rgba(14, 165, 233, 0.95)";
+  context.lineWidth = 3;
+  context.setLineDash([]);
+  context.strokeRect(bounds.x - 6, bounds.y - 6, bounds.width + 12, bounds.height + 12);
   context.restore();
 };
 

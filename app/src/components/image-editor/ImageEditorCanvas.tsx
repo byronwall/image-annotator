@@ -13,11 +13,13 @@ import {
   getAnnotationBounds,
   getBaseImageOffset,
   getResizeHandleAt,
+  hitTestAnnotation,
   loadImageElement,
   renderImageEditorCanvas,
   type Bounds,
 } from "./image-editor.render";
 import {
+  toolMatchesAnnotation,
   type EditorSettings,
   type EditorDraft,
   type ImageAnnotation,
@@ -96,6 +98,19 @@ export const ImageEditorCanvas = (props: ImageEditorCanvasProps) => {
   const [panDrag, setPanDrag] = createSignal<PanDrag>();
   const [inlineEditAnchor, setInlineEditAnchor] = createSignal<InlineEditAnchor>();
 
+  const sameToolHoverAnnotation = createMemo(() => {
+    const project = props.project;
+    const point = pointerPoint();
+
+    if (!project || !point || props.draft) {
+      return undefined;
+    }
+
+    return findHitAnnotation(project.annotations, point, (annotation) =>
+      toolMatchesAnnotation(props.activeTool, annotation),
+    );
+  });
+
   createEffect(() => {
     const dataUrl = props.project?.baseImage.dataUrl;
 
@@ -138,6 +153,8 @@ export const ImageEditorCanvas = (props: ImageEditorCanvasProps) => {
       canvasRef.height = project.height;
     }
 
+    const hoveredId = sameToolHoverAnnotation()?.id;
+
     renderImageEditorCanvas(
       canvasRef,
       image,
@@ -145,6 +162,7 @@ export const ImageEditorCanvas = (props: ImageEditorCanvasProps) => {
       props.draft,
       props.selectedId,
       getBaseImageOffset(project),
+      hoveredId,
     );
     window.requestAnimationFrame(updateCanvasFrame);
   });
@@ -218,6 +236,7 @@ export const ImageEditorCanvas = (props: ImageEditorCanvasProps) => {
         props.draft,
         props.selectedId,
         getBaseImageOffset(project),
+        sameToolHoverAnnotation()?.id,
       );
     };
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -538,6 +557,7 @@ export const ImageEditorCanvas = (props: ImageEditorCanvasProps) => {
           isSpacePanning(),
           panDrag() !== undefined,
           hoverResizeHandle(),
+          sameToolHoverAnnotation() !== undefined,
         ),
         "touch-action": "none",
       };
@@ -556,6 +576,7 @@ export const ImageEditorCanvas = (props: ImageEditorCanvasProps) => {
         isSpacePanning(),
         panDrag() !== undefined,
         hoverResizeHandle(),
+        sameToolHoverAnnotation() !== undefined,
       ),
       "touch-action": "none",
     };
@@ -811,6 +832,22 @@ export const ImageEditorCanvas = (props: ImageEditorCanvasProps) => {
   );
 };
 
+const findHitAnnotation = (
+  annotations: ImageAnnotation[],
+  point: Point,
+  matches: (annotation: ImageAnnotation) => boolean,
+): ImageAnnotation | undefined => {
+  for (let index = annotations.length - 1; index >= 0; index -= 1) {
+    const annotation = annotations[index];
+
+    if (annotation && matches(annotation) && hitTestAnnotation(annotation, point)) {
+      return annotation;
+    }
+  }
+
+  return undefined;
+};
+
 const projectBoundsToFrame = (bounds: Bounds, frame: CanvasFrame): Bounds => ({
   x: frame.left + bounds.x * frame.scaleX,
   y: frame.top + bounds.y * frame.scaleY,
@@ -828,6 +865,7 @@ const canvasCursor = (
   isPanning: boolean,
   isPanDragging: boolean,
   resizeHandle: ResizeHandle | undefined,
+  hasSameToolHover: boolean,
 ) => {
   if (isPanDragging) {
     return "grabbing";
@@ -837,12 +875,16 @@ const canvasCursor = (
     return "grab";
   }
 
-  if (tool !== "select") {
-    return "crosshair";
-  }
-
   if (resizeHandle) {
     return resizeCursor(resizeHandle);
+  }
+
+  if (hasSameToolHover) {
+    return "move";
+  }
+
+  if (tool !== "select") {
+    return "crosshair";
   }
 
   return hasSelection ? "move" : "default";

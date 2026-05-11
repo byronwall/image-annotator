@@ -175,3 +175,30 @@ export const createEditorId = (prefix: string) =>
 
 export const cloneProject = (project: ImageEditorProject): ImageEditorProject =>
   structuredClone(project);
+
+export const toolMatchesAnnotation = (
+  tool: ImageEditorTool,
+  annotation: ImageAnnotation,
+) => {
+  switch (tool) {
+    case "arrow":
+      return annotation.type === "arrow";
+    case "rectangle":
+      return annotation.type === "rectangle";
+    case "ellipse":
+      return annotation.type === "ellipse";
+    case "pen":
+      return annotation.type === "pen";
+    case "highlighter":
+      return annotation.type === "highlighter";
+    case "text":
+      return annotation.type === "text";
+    case "step":
+      return annotation.type === "step";
+    case "pixelate":
+      return annotation.type === "pixelate";
+    case "select":
+    case "crop":
+      return false;
+  }
+};
