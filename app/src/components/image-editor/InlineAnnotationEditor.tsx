@@ -3,6 +3,7 @@ import type { JSX } from "solid-js";
 import { Box } from "styled-system/jsx";
 import { Input } from "~/components/ui/input";
 import { Textarea } from "~/components/ui/textarea";
+import { getTextRenderMetrics } from "./image-editor.render";
 import { type StepAnnotation, type TextAnnotation } from "./image-editor.types";
 
 export type EditableAnnotation = TextAnnotation | StepAnnotation;
@@ -10,6 +11,7 @@ export type EditableAnnotation = TextAnnotation | StepAnnotation;
 export type InlineAnnotationEditorProps = {
   annotation: EditableAnnotation | undefined;
   style: JSX.CSSProperties;
+  scale: number;
   onChange: (id: string, value: string) => void;
   onCommit: () => void;
   onCancel: () => void;
@@ -100,13 +102,14 @@ export const InlineAnnotationEditor = (props: InlineAnnotationEditorProps) => {
                 }
                 onBlur={props.onCommit}
                 onKeyDown={handleKeyDown}
+                wrap="off"
                 width="full"
-                minW="40"
-                h="12"
-                bg="bg.default"
-                boxShadow="lg"
+                h="full"
+                borderWidth="0"
+                boxShadow="none"
                 resize="none"
-                overflowY="auto"
+                overflow="hidden"
+                style={textEditorStyle(textAnnotation(), props.scale)}
               />
             )}
           </Show>
@@ -125,3 +128,31 @@ const asStepAnnotation = (
   annotation: EditableAnnotation,
 ): StepAnnotation | undefined =>
   annotation.type === "step" ? annotation : undefined;
+
+const textEditorStyle = (
+  annotation: TextAnnotation,
+  scale: number,
+): JSX.CSSProperties => {
+  const metrics = getTextRenderMetrics(annotation);
+  const visualScale = Math.max(0.01, scale);
+
+  return {
+    color: annotation.color,
+    "background-color": annotation.backgroundColor,
+    opacity: annotation.opacity,
+    "font-family": metrics.fontFamily,
+    "font-size": `${annotation.fontSize * visualScale}px`,
+    "font-weight": metrics.fontWeight,
+    "line-height": `${metrics.lineHeight * visualScale}px`,
+    padding: `${metrics.paddingY * visualScale}px ${metrics.paddingX * visualScale}px`,
+    border: "0",
+    "border-radius": `${metrics.borderRadius * visualScale}px`,
+    "box-shadow": "none",
+    outline: "none",
+    resize: "none",
+    overflow: "hidden",
+    "box-sizing": "border-box",
+    "caret-color": annotation.color,
+    "white-space": "pre",
+  };
+};

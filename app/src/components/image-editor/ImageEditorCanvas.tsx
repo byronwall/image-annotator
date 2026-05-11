@@ -101,14 +101,30 @@ export const ImageEditorCanvas = (props: ImageEditorCanvasProps) => {
   const sameToolHoverAnnotation = createMemo(() => {
     const project = props.project;
     const point = pointerPoint();
+    const activeTool = props.activeTool;
 
     if (!project || !point || props.draft) {
       return undefined;
     }
 
     return findHitAnnotation(project.annotations, point, (annotation) =>
-      toolMatchesAnnotation(props.activeTool, annotation),
+      toolMatchesAnnotation(activeTool, annotation),
     );
+  });
+
+  const canvasAnnotations = createMemo(() => {
+    const project = props.project;
+    const editingId = props.inlineEditingAnnotation?.id;
+
+    if (!project) {
+      return [];
+    }
+
+    if (!editingId) {
+      return project.annotations;
+    }
+
+    return project.annotations.filter((annotation) => annotation.id !== editingId);
   });
 
   createEffect(() => {
@@ -153,14 +169,16 @@ export const ImageEditorCanvas = (props: ImageEditorCanvasProps) => {
       canvasRef.height = project.height;
     }
 
-    const hoveredId = sameToolHoverAnnotation()?.id;
+    const hoveredId = props.inlineEditingAnnotation
+      ? undefined
+      : sameToolHoverAnnotation()?.id;
 
     renderImageEditorCanvas(
       canvasRef,
       image,
-      project.annotations,
+      canvasAnnotations(),
       props.draft,
-      props.selectedId,
+      props.inlineEditingAnnotation ? undefined : props.selectedId,
       getBaseImageOffset(project),
       hoveredId,
     );
@@ -232,11 +250,11 @@ export const ImageEditorCanvas = (props: ImageEditorCanvasProps) => {
       renderImageEditorCanvas(
         canvasRef,
         image,
-        project.annotations,
+        canvasAnnotations(),
         props.draft,
-        props.selectedId,
+        props.inlineEditingAnnotation ? undefined : props.selectedId,
         getBaseImageOffset(project),
-        sameToolHoverAnnotation()?.id,
+        props.inlineEditingAnnotation ? undefined : sameToolHoverAnnotation()?.id,
       );
     };
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -511,7 +529,9 @@ export const ImageEditorCanvas = (props: ImageEditorCanvasProps) => {
       return { left: "50%", top: "50%", transform: "translate(-50%, -50%)" };
     }
 
-    const bounds = projectBoundsToFrame(anchor.bounds, frame);
+    const boundsSource =
+      annotation.type === "text" ? getAnnotationBounds(annotation) : anchor.bounds;
+    const bounds = projectBoundsToFrame(boundsSource, frame);
 
     if (anchor.type === "step") {
       return {
@@ -524,9 +544,15 @@ export const ImageEditorCanvas = (props: ImageEditorCanvasProps) => {
     return {
       left: `${bounds.x}px`,
       top: `${bounds.y}px`,
-      width: `${Math.max(180, Math.min(360, bounds.width + 32))}px`,
-      transform: "translateY(-2px)",
+      width: `${Math.max(1, bounds.width)}px`,
+      height: `${Math.max(1, bounds.height)}px`,
     };
+  });
+
+  const inlineEditorScale = createMemo(() => {
+    const frame = canvasFrame();
+
+    return frame ? Math.min(frame.scaleX, frame.scaleY) : 1;
   });
 
   const hoverResizeHandle = createMemo((): ResizeHandle | undefined => {
@@ -783,6 +809,7 @@ export const ImageEditorCanvas = (props: ImageEditorCanvasProps) => {
             <InlineAnnotationEditor
               annotation={props.inlineEditingAnnotation}
               style={inlineEditorStyle()}
+              scale={inlineEditorScale()}
               onChange={props.onInlineEditChange}
               onCommit={props.onInlineEditCommit}
               onCancel={props.onInlineEditCancel}

@@ -23,6 +23,10 @@ export type Bounds = {
 const selectionColor = "#0ea5e9";
 const resizeHandleSize = 12;
 const imageLayerCache = new Map<string, HTMLImageElement>();
+const textAnnotationFontFamily =
+  'ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+const textAnnotationFontWeight = 700;
+let textMeasurementContext: CanvasRenderingContext2D | undefined;
 
 export const normalizeRect = (
   x: number,
@@ -152,6 +156,17 @@ export const getBaseImageOffset = (
 ): Point => ({
   x: project.baseImage.offsetX ?? 0,
   y: project.baseImage.offsetY ?? 0,
+});
+
+export const getTextRenderMetrics = (
+  annotation: Pick<TextAnnotation, "fontSize">,
+) => ({
+  paddingX: Math.max(8, annotation.fontSize * 0.32),
+  paddingY: Math.max(5, annotation.fontSize * 0.22),
+  lineHeight: annotation.fontSize * 1.28,
+  fontFamily: textAnnotationFontFamily,
+  fontWeight: textAnnotationFontWeight,
+  borderRadius: 8,
 });
 
 export const getAnnotationBounds = (annotation: ImageAnnotation): Bounds => {
@@ -536,30 +551,28 @@ const drawText = (
   context: CanvasRenderingContext2D,
   annotation: TextAnnotation,
 ) => {
-  const paddingX = Math.max(8, annotation.fontSize * 0.32);
-  const paddingY = Math.max(5, annotation.fontSize * 0.22);
-  const lineHeight = annotation.fontSize * 1.28;
+  const metrics = getTextRenderMetrics(annotation);
   const lines = getTextLines(annotation.text);
 
   context.save();
   context.globalAlpha = annotation.opacity;
-  context.font = `700 ${annotation.fontSize}px ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
+  context.font = getTextAnnotationFont(annotation);
   context.textBaseline = "top";
   const width =
     Math.max(...lines.map((line) => context.measureText(line).width)) +
-    paddingX * 2;
-  const height = lineHeight * lines.length + paddingY * 2;
+    metrics.paddingX * 2;
+  const height = metrics.lineHeight * lines.length + metrics.paddingY * 2;
 
   context.fillStyle = annotation.backgroundColor;
-  drawRoundRect(context, annotation.x, annotation.y, width, height, 8);
+  drawRoundRect(context, annotation.x, annotation.y, width, height, metrics.borderRadius);
   context.fill();
   context.fillStyle = annotation.color;
 
   for (let index = 0; index < lines.length; index += 1) {
     context.fillText(
       lines[index] ?? "",
-      annotation.x + paddingX,
-      annotation.y + paddingY + index * lineHeight,
+      annotation.x + metrics.paddingX,
+      annotation.y + metrics.paddingY + index * metrics.lineHeight,
     );
   }
 
@@ -895,12 +908,12 @@ const getPathBounds = (annotation: PathAnnotation): Bounds => {
 };
 
 const getTextBounds = (annotation: TextAnnotation): Bounds => {
-  const paddingX = Math.max(8, annotation.fontSize * 0.32);
-  const paddingY = Math.max(5, annotation.fontSize * 0.22);
+  const metrics = getTextRenderMetrics(annotation);
   const lines = getTextLines(annotation.text);
-  const longestLine = Math.max(...lines.map((line) => line.length));
-  const width = longestLine * annotation.fontSize * 0.62 + paddingX * 2;
-  const height = annotation.fontSize * 1.28 * lines.length + paddingY * 2;
+  const width =
+    Math.max(...lines.map((line) => measureTextLine(annotation, line))) +
+    metrics.paddingX * 2;
+  const height = metrics.lineHeight * lines.length + metrics.paddingY * 2;
 
   return {
     x: annotation.x,
@@ -932,4 +945,31 @@ const movePoint = (point: Point, deltaX: number, deltaY: number): Point => ({
 const getTextLines = (text: string) => {
   const lines = text.split(/\r?\n/);
   return lines.length > 0 ? lines : [""];
+};
+
+const getTextAnnotationFont = (annotation: Pick<TextAnnotation, "fontSize">) => {
+  const metrics = getTextRenderMetrics(annotation);
+
+  return `${metrics.fontWeight} ${annotation.fontSize}px ${metrics.fontFamily}`;
+};
+
+const measureTextLine = (
+  annotation: Pick<TextAnnotation, "fontSize">,
+  line: string,
+) => {
+  if (typeof document === "undefined") {
+    return line.length * annotation.fontSize * 0.62;
+  }
+
+  if (!textMeasurementContext) {
+    textMeasurementContext = document.createElement("canvas").getContext("2d") ?? undefined;
+  }
+
+  if (!textMeasurementContext) {
+    return line.length * annotation.fontSize * 0.62;
+  }
+
+  textMeasurementContext.font = getTextAnnotationFont(annotation);
+
+  return textMeasurementContext.measureText(line).width;
 };
