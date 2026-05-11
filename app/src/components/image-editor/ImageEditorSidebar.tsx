@@ -51,6 +51,9 @@ export const ImageEditorSidebar = (props: ImageEditorSidebarProps) => {
       gap="5"
       p="4"
       width={{ base: "full", lg: "80" }}
+      maxH={{ base: "45dvh", lg: "none" }}
+      minH="0"
+      flexShrink="0"
       borderRightWidth={{ base: "0", lg: "1px" }}
       borderBottomWidth={{ base: "1px", lg: "0" }}
       borderColor="border"
@@ -186,6 +189,9 @@ const LayerRow = (props: LayerRowProps) => (
     borderRadius="l2"
     bg={props.selected ? "blue.2" : "bg.subtle"}
     opacity={props.annotation.hidden ? 0.62 : 1}
+    transitionProperty="box-shadow, border-color, background-color"
+    transitionDuration="fast"
+    _hover={{ boxShadow: "sm", borderColor: "blue.7" }}
   >
     <Box
       as="button"
@@ -195,6 +201,7 @@ const LayerRow = (props: LayerRowProps) => (
       px="2"
       py="1.5"
       borderRadius="l1"
+      cursor="pointer"
       onClick={() => props.onSelect(props.annotation.id)}
     >
       <HStack justifyContent="space-between" gap="2" minW="0">

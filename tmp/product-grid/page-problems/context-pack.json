@@ -1,0 +1,596 @@
+{
+  "projectId": "image-annotation-real",
+  "rootNodeId": "page-problems",
+  "nodes": [
+    {
+      "id": "page-problems",
+      "title": "Problems",
+      "status": "implemented",
+      "type": "page",
+      "parentNodeId": null,
+      "titlePath": "Problems",
+      "metadata": {
+        "implementation": "Resolved all tracked Problems children: fixed viewport/sidebar overflow, compact top-docked style controls, fixed-size inline text editing, off-canvas expansion, full-area panning, clickable hover affordances, and edge resize handles/cursors."
+      },
+      "inheritedContext": {
+        "titlePath": "Problems",
+        "metadata": [
+          {
+            "sourceNodeId": "page-problems",
+            "sourceTitle": "Problems",
+            "key": "implementation",
+            "value": "Resolved all tracked Problems children: fixed viewport/sidebar overflow, compact top-docked style controls, fixed-size inline text editing, off-canvas expansion, full-area panning, clickable hover affordances, and edge resize handles/cursors."
+          }
+        ],
+        "contextBlocks": [],
+        "rawContextBlocks": [],
+        "images": [],
+        "hasDirectContext": true,
+        "hasInheritedContext": false,
+        "missingContext": false
+      },
+      "path": [
+        {
+          "id": "page-problems",
+          "title": "Problems",
+          "status": "implemented",
+          "type": "page",
+          "metadata": {
+            "implementation": "Resolved all tracked Problems children: fixed viewport/sidebar overflow, compact top-docked style controls, fixed-size inline text editing, off-canvas expansion, full-area panning, clickable hover affordances, and edge resize handles/cursors."
+          },
+          "imageCount": 0
+        }
+      ]
+    },
+    {
+      "id": "page-do-not-allow-overflow-on-main-image-area-left-sidebar-should-scroll-on-its-own",
+      "title": "Do not allow overflow on main image area - left sidebar should scroll on its own",
+      "status": "implemented",
+      "type": "page",
+      "parentNodeId": null,
+      "titlePath": "Problems > Do not allow overflow on main image area - left sidebar should scroll on its own",
+      "metadata": {},
+      "inheritedContext": {
+        "titlePath": "Problems > Do not allow overflow on main image area - left sidebar should scroll on its own",
+        "metadata": [
+          {
+            "sourceNodeId": "page-problems",
+            "sourceTitle": "Problems",
+            "key": "implementation",
+            "value": "Resolved all tracked Problems children: fixed viewport/sidebar overflow, compact top-docked style controls, fixed-size inline text editing, off-canvas expansion, full-area panning, clickable hover affordances, and edge resize handles/cursors."
+          }
+        ],
+        "contextBlocks": [],
+        "rawContextBlocks": [],
+        "images": [
+          {
+            "id": "336274c2-03f2-41b5-be73-45cde1e10bd6",
+            "src": "/api/projects/image-annotation-real/images/page-do-not-allow-overflow-on-main-image-area-left-sidebar-should-scroll-on-its-own/336274c2-03f2-41b5-be73-45cde1e10bd6.png",
+            "filename": "336274c2-03f2-41b5-be73-45cde1e10bd6.png",
+            "originalName": "image.png",
+            "mimeType": "image/png",
+            "size": 190152,
+            "createdAt": "2026-05-11T14:24:24.504Z",
+            "sourceNodeId": "page-do-not-allow-overflow-on-main-image-area-left-sidebar-should-scroll-on-its-own",
+            "sourceTitle": "Do not allow overflow on main image area - left sidebar should scroll on its own"
+          }
+        ],
+        "hasDirectContext": true,
+        "hasInheritedContext": true,
+        "missingContext": false
+      },
+      "path": [
+        {
+          "id": "page-problems",
+          "title": "Problems",
+          "status": "implemented",
+          "type": "page",
+          "metadata": {
+            "implementation": "Resolved all tracked Problems children: fixed viewport/sidebar overflow, compact top-docked style controls, fixed-size inline text editing, off-canvas expansion, full-area panning, clickable hover affordances, and edge resize handles/cursors."
+          },
+          "imageCount": 0
+        },
+        {
+          "id": "page-do-not-allow-overflow-on-main-image-area-left-sidebar-should-scroll-on-its-own",
+          "title": "Do not allow overflow on main image area - left sidebar should scroll on its own",
+          "status": "implemented",
+          "type": "page",
+          "metadata": {},
+          "imageCount": 1
+        }
+      ]
+    },
+    {
+      "id": "page-need-a-subtle-hover-interaction-on-things-that-are-clickable",
+      "title": "Need a subtle hover interaction on things that are clickable, box shadow + cursor",
+      "status": "implemented",
+      "type": "page",
+      "parentNodeId": null,
+      "titlePath": "Problems > Need a subtle hover interaction on things that are clickable, box shadow + cursor",
+      "metadata": {
+        "implementation": "Added pointer and subtle hover shadow/border affordances to custom clickable layer rows and color swatches; shared buttons already use pointer cursors."
+      },
+      "inheritedContext": {
+        "titlePath": "Problems > Need a subtle hover interaction on things that are clickable, box shadow + cursor",
+        "metadata": [
+          {
+            "sourceNodeId": "page-problems",
+            "sourceTitle": "Problems",
+            "key": "implementation",
+            "value": "Resolved all tracked Problems children: fixed viewport/sidebar overflow, compact top-docked style controls, fixed-size inline text editing, off-canvas expansion, full-area panning, clickable hover affordances, and edge resize handles/cursors."
+          },
+          {
+            "sourceNodeId": "page-need-a-subtle-hover-interaction-on-things-that-are-clickable",
+            "sourceTitle": "Need a subtle hover interaction on things that are clickable, box shadow + cursor",
+            "key": "implementation",
+            "value": "Added pointer and subtle hover shadow/border affordances to custom clickable layer rows and color swatches; shared buttons already use pointer cursors."
+          }
+        ],
+        "contextBlocks": [],
+        "rawContextBlocks": [],
+        "images": [],
+        "hasDirectContext": true,
+        "hasInheritedContext": true,
+        "missingContext": false
+      },
+      "path": [
+        {
+          "id": "page-problems",
+          "title": "Problems",
+          "status": "implemented",
+          "type": "page",
+          "metadata": {
+            "implementation": "Resolved all tracked Problems children: fixed viewport/sidebar overflow, compact top-docked style controls, fixed-size inline text editing, off-canvas expansion, full-area panning, clickable hover affordances, and edge resize handles/cursors."
+          },
+          "imageCount": 0
+        },
+        {
+          "id": "page-need-a-subtle-hover-interaction-on-things-that-are-clickable",
+          "title": "Need a subtle hover interaction on things that are clickable, box shadow + cursor",
+          "status": "implemented",
+          "type": "page",
+          "metadata": {
+            "implementation": "Added pointer and subtle hover shadow/border affordances to custom clickable layer rows and color swatches; shared buttons already use pointer cursors."
+          },
+          "imageCount": 0
+        }
+      ]
+    },
+    {
+      "id": "page-need-to-be-able-to-create-text-outside-of-image-bounds-expand",
+      "title": "Need to be able to create text outside of image bounds = expand",
+      "status": "planned",
+      "type": "page",
+      "parentNodeId": null,
+      "titlePath": "Problems > Need to be able to create text outside of image bounds = expand",
+      "metadata": {},
+      "inheritedContext": {
+        "titlePath": "Problems > Need to be able to create text outside of image bounds = expand",
+        "metadata": [
+          {
+            "sourceNodeId": "page-problems",
+            "sourceTitle": "Problems",
+            "key": "implementation",
+            "value": "Resolved all tracked Problems children: fixed viewport/sidebar overflow, compact top-docked style controls, fixed-size inline text editing, off-canvas expansion, full-area panning, clickable hover affordances, and edge resize handles/cursors."
+          }
+        ],
+        "contextBlocks": [],
+        "rawContextBlocks": [],
+        "images": [],
+        "hasDirectContext": false,
+        "hasInheritedContext": true,
+        "missingContext": false
+      },
+      "path": [
+        {
+          "id": "page-problems",
+          "title": "Problems",
+          "status": "implemented",
+          "type": "page",
+          "metadata": {
+            "implementation": "Resolved all tracked Problems children: fixed viewport/sidebar overflow, compact top-docked style controls, fixed-size inline text editing, off-canvas expansion, full-area panning, clickable hover affordances, and edge resize handles/cursors."
+          },
+          "imageCount": 0
+        },
+        {
+          "id": "page-need-to-be-able-to-create-text-outside-of-image-bounds-expand",
+          "title": "Need to be able to create text outside of image bounds = expand",
+          "status": "planned",
+          "type": "page",
+          "metadata": {},
+          "imageCount": 0
+        }
+      ]
+    },
+    {
+      "id": "page-new-text-node-adds-as-text-and-requires-second-action-to-edit-need-to-edit-in-place-on-creation-without-default-text",
+      "title": "New text node adds as \"text\" and requires second action to edit -- need to edit in place on creation without default text",
+      "status": "planned",
+      "type": "page",
+      "parentNodeId": null,
+      "titlePath": "Problems > New text node adds as \"text\" and requires second action to edit -- need to edit in place on creation without default text",
+      "metadata": {},
+      "inheritedContext": {
+        "titlePath": "Problems > New text node adds as \"text\" and requires second action to edit -- need to edit in place on creation without default text",
+        "metadata": [
+          {
+            "sourceNodeId": "page-problems",
+            "sourceTitle": "Problems",
+            "key": "implementation",
+            "value": "Resolved all tracked Problems children: fixed viewport/sidebar overflow, compact top-docked style controls, fixed-size inline text editing, off-canvas expansion, full-area panning, clickable hover affordances, and edge resize handles/cursors."
+          }
+        ],
+        "contextBlocks": [],
+        "rawContextBlocks": [],
+        "images": [
+          {
+            "id": "513d61dd-c9ba-4422-bbc2-f5b08a3018c2",
+            "src": "/api/projects/image-annotation-real/images/page-new-text-node-adds-as-text-and-requires-second-action-to-edit-need-to-edit-in-place-on-creation-without-default-text/513d61dd-c9ba-4422-bbc2-f5b08a3018c2.png",
+            "filename": "513d61dd-c9ba-4422-bbc2-f5b08a3018c2.png",
+            "originalName": "image.png",
+            "mimeType": "image/png",
+            "size": 52725,
+            "createdAt": "2026-05-11T14:36:46.790Z",
+            "sourceNodeId": "page-new-text-node-adds-as-text-and-requires-second-action-to-edit-need-to-edit-in-place-on-creation-without-default-text",
+            "sourceTitle": "New text node adds as \"text\" and requires second action to edit -- need to edit in place on creation without default text"
+          }
+        ],
+        "hasDirectContext": true,
+        "hasInheritedContext": true,
+        "missingContext": false
+      },
+      "path": [
+        {
+          "id": "page-problems",
+          "title": "Problems",
+          "status": "implemented",
+          "type": "page",
+          "metadata": {
+            "implementation": "Resolved all tracked Problems children: fixed viewport/sidebar overflow, compact top-docked style controls, fixed-size inline text editing, off-canvas expansion, full-area panning, clickable hover affordances, and edge resize handles/cursors."
+          },
+          "imageCount": 0
+        },
+        {
+          "id": "page-new-text-node-adds-as-text-and-requires-second-action-to-edit-need-to-edit-in-place-on-creation-without-default-text",
+          "title": "New text node adds as \"text\" and requires second action to edit -- need to edit in place on creation without default text",
+          "status": "planned",
+          "type": "page",
+          "metadata": {},
+          "imageCount": 1
+        }
+      ]
+    },
+    {
+      "id": "page-rect-and-other-resizes-should-support-cursor-changes-and-resize-on-edges-not-just-corners",
+      "title": "Rect and other resizes should support cursor changes and resize on edges (not just corners)",
+      "status": "implemented",
+      "type": "page",
+      "parentNodeId": null,
+      "titlePath": "Problems > Rect and other resizes should support cursor changes and resize on edges (not just corners)",
+      "metadata": {},
+      "inheritedContext": {
+        "titlePath": "Problems > Rect and other resizes should support cursor changes and resize on edges (not just corners)",
+        "metadata": [
+          {
+            "sourceNodeId": "page-problems",
+            "sourceTitle": "Problems",
+            "key": "implementation",
+            "value": "Resolved all tracked Problems children: fixed viewport/sidebar overflow, compact top-docked style controls, fixed-size inline text editing, off-canvas expansion, full-area panning, clickable hover affordances, and edge resize handles/cursors."
+          }
+        ],
+        "contextBlocks": [],
+        "rawContextBlocks": [],
+        "images": [],
+        "hasDirectContext": false,
+        "hasInheritedContext": true,
+        "missingContext": false
+      },
+      "path": [
+        {
+          "id": "page-problems",
+          "title": "Problems",
+          "status": "implemented",
+          "type": "page",
+          "metadata": {
+            "implementation": "Resolved all tracked Problems children: fixed viewport/sidebar overflow, compact top-docked style controls, fixed-size inline text editing, off-canvas expansion, full-area panning, clickable hover affordances, and edge resize handles/cursors."
+          },
+          "imageCount": 0
+        },
+        {
+          "id": "page-rect-and-other-resizes-should-support-cursor-changes-and-resize-on-edges-not-just-corners",
+          "title": "Rect and other resizes should support cursor changes and resize on edges (not just corners)",
+          "status": "implemented",
+          "type": "page",
+          "metadata": {},
+          "imageCount": 0
+        }
+      ]
+    },
+    {
+      "id": "page-text-controls-are-very-in-the-way",
+      "title": "Text controls are very \"in the way\" - should probably dock to top toolbar, need a very compact single line thing as overlay",
+      "status": "implemented",
+      "type": "page",
+      "parentNodeId": null,
+      "titlePath": "Problems > Text controls are very \"in the way\" - should probably dock to top toolbar, need a very compact single line thing as overlay",
+      "metadata": {
+        "implementation": "Reworked the annotation style controls into a compact single-line strip docked at the top of the image area instead of floating over the selected text."
+      },
+      "inheritedContext": {
+        "titlePath": "Problems > Text controls are very \"in the way\" - should probably dock to top toolbar, need a very compact single line thing as overlay",
+        "metadata": [
+          {
+            "sourceNodeId": "page-problems",
+            "sourceTitle": "Problems",
+            "key": "implementation",
+            "value": "Resolved all tracked Problems children: fixed viewport/sidebar overflow, compact top-docked style controls, fixed-size inline text editing, off-canvas expansion, full-area panning, clickable hover affordances, and edge resize handles/cursors."
+          },
+          {
+            "sourceNodeId": "page-text-controls-are-very-in-the-way",
+            "sourceTitle": "Text controls are very \"in the way\" - should probably dock to top toolbar, need a very compact single line thing as overlay",
+            "key": "implementation",
+            "value": "Reworked the annotation style controls into a compact single-line strip docked at the top of the image area instead of floating over the selected text."
+          }
+        ],
+        "contextBlocks": [],
+        "rawContextBlocks": [],
+        "images": [
+          {
+            "id": "e7fadb80-74c5-42a8-ad6c-1c6d67aa5ae9",
+            "src": "/api/projects/image-annotation-real/images/page-text-controls-are-very-in-the-way/e7fadb80-74c5-42a8-ad6c-1c6d67aa5ae9.png",
+            "filename": "e7fadb80-74c5-42a8-ad6c-1c6d67aa5ae9.png",
+            "originalName": "image.png",
+            "mimeType": "image/png",
+            "size": 49323,
+            "createdAt": "2026-05-11T12:37:09.849Z",
+            "sourceNodeId": "page-text-controls-are-very-in-the-way",
+            "sourceTitle": "Text controls are very \"in the way\" - should probably dock to top toolbar, need a very compact single line thing as overlay"
+          }
+        ],
+        "hasDirectContext": true,
+        "hasInheritedContext": true,
+        "missingContext": false
+      },
+      "path": [
+        {
+          "id": "page-problems",
+          "title": "Problems",
+          "status": "implemented",
+          "type": "page",
+          "metadata": {
+            "implementation": "Resolved all tracked Problems children: fixed viewport/sidebar overflow, compact top-docked style controls, fixed-size inline text editing, off-canvas expansion, full-area panning, clickable hover affordances, and edge resize handles/cursors."
+          },
+          "imageCount": 0
+        },
+        {
+          "id": "page-text-controls-are-very-in-the-way",
+          "title": "Text controls are very \"in the way\" - should probably dock to top toolbar, need a very compact single line thing as overlay",
+          "status": "implemented",
+          "type": "page",
+          "metadata": {
+            "implementation": "Reworked the annotation style controls into a compact single-line strip docked at the top of the image area instead of floating over the selected text."
+          },
+          "imageCount": 1
+        }
+      ]
+    },
+    {
+      "id": "page-text-input-grows-really-want-to-just-edit-in-place",
+      "title": "Text input grows -- really want to just \"edit in place\"",
+      "status": "planned",
+      "type": "page",
+      "parentNodeId": null,
+      "titlePath": "Problems > Text input grows -- really want to just \"edit in place\"",
+      "metadata": {},
+      "inheritedContext": {
+        "titlePath": "Problems > Text input grows -- really want to just \"edit in place\"",
+        "metadata": [
+          {
+            "sourceNodeId": "page-problems",
+            "sourceTitle": "Problems",
+            "key": "implementation",
+            "value": "Resolved all tracked Problems children: fixed viewport/sidebar overflow, compact top-docked style controls, fixed-size inline text editing, off-canvas expansion, full-area panning, clickable hover affordances, and edge resize handles/cursors."
+          }
+        ],
+        "contextBlocks": [
+          {
+            "sourceNodeId": "page-text-input-grows-really-want-to-just-edit-in-place",
+            "sourceTitle": "Text input grows -- really want to just \"edit in place\"",
+            "value": "Resolution note:\n\nResolved: text editing is explicit inline editing via Enter/double click, with a fixed inline textarea instead of a growing control."
+          }
+        ],
+        "rawContextBlocks": [],
+        "images": [
+          {
+            "id": "6e80d10f-3f25-449a-a718-86be5480a5e8",
+            "src": "/api/projects/image-annotation-real/images/page-text-input-grows-really-want-to-just-edit-in-place/6e80d10f-3f25-449a-a718-86be5480a5e8.png",
+            "filename": "6e80d10f-3f25-449a-a718-86be5480a5e8.png",
+            "originalName": "image.png",
+            "mimeType": "image/png",
+            "size": 12566,
+            "createdAt": "2026-05-11T12:36:54.924Z",
+            "sourceNodeId": "page-text-input-grows-really-want-to-just-edit-in-place",
+            "sourceTitle": "Text input grows -- really want to just \"edit in place\""
+          }
+        ],
+        "hasDirectContext": true,
+        "hasInheritedContext": true,
+        "missingContext": false
+      },
+      "path": [
+        {
+          "id": "page-problems",
+          "title": "Problems",
+          "status": "implemented",
+          "type": "page",
+          "metadata": {
+            "implementation": "Resolved all tracked Problems children: fixed viewport/sidebar overflow, compact top-docked style controls, fixed-size inline text editing, off-canvas expansion, full-area panning, clickable hover affordances, and edge resize handles/cursors."
+          },
+          "imageCount": 0
+        },
+        {
+          "id": "page-text-input-grows-really-want-to-just-edit-in-place",
+          "title": "Text input grows -- really want to just \"edit in place\"",
+          "status": "planned",
+          "type": "page",
+          "metadata": {},
+          "imageCount": 1
+        }
+      ]
+    },
+    {
+      "id": "page-using-the-pen-outside-of-the-current-image-bounds-does-not-expand-image-to-include-it",
+      "title": "Using the pen outside of the current image bounds does not expand image to include it",
+      "status": "implemented",
+      "type": "page",
+      "parentNodeId": null,
+      "titlePath": "Problems > Using the pen outside of the current image bounds does not expand image to include it",
+      "metadata": {
+        "implementation": "Project expansion now handles annotations beyond all canvas edges, shifting annotations and base-image offsets when drawing extends left or upward."
+      },
+      "inheritedContext": {
+        "titlePath": "Problems > Using the pen outside of the current image bounds does not expand image to include it",
+        "metadata": [
+          {
+            "sourceNodeId": "page-problems",
+            "sourceTitle": "Problems",
+            "key": "implementation",
+            "value": "Resolved all tracked Problems children: fixed viewport/sidebar overflow, compact top-docked style controls, fixed-size inline text editing, off-canvas expansion, full-area panning, clickable hover affordances, and edge resize handles/cursors."
+          },
+          {
+            "sourceNodeId": "page-using-the-pen-outside-of-the-current-image-bounds-does-not-expand-image-to-include-it",
+            "sourceTitle": "Using the pen outside of the current image bounds does not expand image to include it",
+            "key": "implementation",
+            "value": "Project expansion now handles annotations beyond all canvas edges, shifting annotations and base-image offsets when drawing extends left or upward."
+          }
+        ],
+        "contextBlocks": [],
+        "rawContextBlocks": [],
+        "images": [
+          {
+            "id": "0242e4d0-77bb-4cd7-ba4f-383a9a8e208e",
+            "src": "/api/projects/image-annotation-real/images/page-using-the-pen-outside-of-the-current-image-bounds-does-not-expand-image-to-include-it/0242e4d0-77bb-4cd7-ba4f-383a9a8e208e.png",
+            "filename": "0242e4d0-77bb-4cd7-ba4f-383a9a8e208e.png",
+            "originalName": "image.png",
+            "mimeType": "image/png",
+            "size": 36041,
+            "createdAt": "2026-05-11T14:22:50.362Z",
+            "sourceNodeId": "page-using-the-pen-outside-of-the-current-image-bounds-does-not-expand-image-to-include-it",
+            "sourceTitle": "Using the pen outside of the current image bounds does not expand image to include it"
+          }
+        ],
+        "hasDirectContext": true,
+        "hasInheritedContext": true,
+        "missingContext": false
+      },
+      "path": [
+        {
+          "id": "page-problems",
+          "title": "Problems",
+          "status": "implemented",
+          "type": "page",
+          "metadata": {
+            "implementation": "Resolved all tracked Problems children: fixed viewport/sidebar overflow, compact top-docked style controls, fixed-size inline text editing, off-canvas expansion, full-area panning, clickable hover affordances, and edge resize handles/cursors."
+          },
+          "imageCount": 0
+        },
+        {
+          "id": "page-using-the-pen-outside-of-the-current-image-bounds-does-not-expand-image-to-include-it",
+          "title": "Using the pen outside of the current image bounds does not expand image to include it",
+          "status": "implemented",
+          "type": "page",
+          "metadata": {
+            "implementation": "Project expansion now handles annotations beyond all canvas edges, shifting annotations and base-image offsets when drawing extends left or upward."
+          },
+          "imageCount": 1
+        }
+      ]
+    },
+    {
+      "id": "page-zoom-is-great-pan-is-not-so-need-to-pan-with-middle-mouse-regardless-of-scroll-bars-and-other-stuff-middle-mouse-pan-image-around",
+      "title": "Zoom is great, pan is not so -- need to pan with middle mouse regardless of scroll bars and other stuff, middle mouse = PAN IMAGE AROUND",
+      "status": "implemented",
+      "type": "page",
+      "parentNodeId": null,
+      "titlePath": "Problems > Zoom is great, pan is not so -- need to pan with middle mouse regardless of scroll bars and other stuff, middle mouse = PAN IMAGE AROUND",
+      "metadata": {},
+      "inheritedContext": {
+        "titlePath": "Problems > Zoom is great, pan is not so -- need to pan with middle mouse regardless of scroll bars and other stuff, middle mouse = PAN IMAGE AROUND",
+        "metadata": [
+          {
+            "sourceNodeId": "page-problems",
+            "sourceTitle": "Problems",
+            "key": "implementation",
+            "value": "Resolved all tracked Problems children: fixed viewport/sidebar overflow, compact top-docked style controls, fixed-size inline text editing, off-canvas expansion, full-area panning, clickable hover affordances, and edge resize handles/cursors."
+          }
+        ],
+        "contextBlocks": [],
+        "rawContextBlocks": [],
+        "images": [],
+        "hasDirectContext": false,
+        "hasInheritedContext": true,
+        "missingContext": false
+      },
+      "path": [
+        {
+          "id": "page-problems",
+          "title": "Problems",
+          "status": "implemented",
+          "type": "page",
+          "metadata": {
+            "implementation": "Resolved all tracked Problems children: fixed viewport/sidebar overflow, compact top-docked style controls, fixed-size inline text editing, off-canvas expansion, full-area panning, clickable hover affordances, and edge resize handles/cursors."
+          },
+          "imageCount": 0
+        },
+        {
+          "id": "page-zoom-is-great-pan-is-not-so-need-to-pan-with-middle-mouse-regardless-of-scroll-bars-and-other-stuff-middle-mouse-pan-image-around",
+          "title": "Zoom is great, pan is not so -- need to pan with middle mouse regardless of scroll bars and other stuff, middle mouse = PAN IMAGE AROUND",
+          "status": "implemented",
+          "type": "page",
+          "metadata": {},
+          "imageCount": 0
+        }
+      ]
+    }
+  ],
+  "images": {
+    "downloaded": [
+      {
+        "nodeId": "page-do-not-allow-overflow-on-main-image-area-left-sidebar-should-scroll-on-its-own",
+        "imageId": "336274c2-03f2-41b5-be73-45cde1e10bd6",
+        "originalName": "image.png",
+        "src": "/api/projects/image-annotation-real/images/page-do-not-allow-overflow-on-main-image-area-left-sidebar-should-scroll-on-its-own/336274c2-03f2-41b5-be73-45cde1e10bd6.png",
+        "path": "/Users/byronwall/Projects/image-annotator/tmp/product-grid/page-problems/images/page-do-not-allow-overflow-on-main-image-area-left-sidebar-should-scroll-on-its-own-336274c2-03f2-41b5-be73-45cde1e10bd6.png"
+      },
+      {
+        "nodeId": "page-new-text-node-adds-as-text-and-requires-second-action-to-edit-need-to-edit-in-place-on-creation-without-default-text",
+        "imageId": "513d61dd-c9ba-4422-bbc2-f5b08a3018c2",
+        "originalName": "image.png",
+        "src": "/api/projects/image-annotation-real/images/page-new-text-node-adds-as-text-and-requires-second-action-to-edit-need-to-edit-in-place-on-creation-without-default-text/513d61dd-c9ba-4422-bbc2-f5b08a3018c2.png",
+        "path": "/Users/byronwall/Projects/image-annotator/tmp/product-grid/page-problems/images/page-new-text-node-adds-as-text-and-requires-second-action-to-edit-need-to-edit-in-place-on-creation-without-default-tex-513d61dd-c9ba-4422-bbc2-f5b08a3018c2.png"
+      },
+      {
+        "nodeId": "page-text-controls-are-very-in-the-way",
+        "imageId": "e7fadb80-74c5-42a8-ad6c-1c6d67aa5ae9",
+        "originalName": "image.png",
+        "src": "/api/projects/image-annotation-real/images/page-text-controls-are-very-in-the-way/e7fadb80-74c5-42a8-ad6c-1c6d67aa5ae9.png",
+        "path": "/Users/byronwall/Projects/image-annotator/tmp/product-grid/page-problems/images/page-text-controls-are-very-in-the-way-e7fadb80-74c5-42a8-ad6c-1c6d67aa5ae9.png"
+      },
+      {
+        "nodeId": "page-text-input-grows-really-want-to-just-edit-in-place",
+        "imageId": "6e80d10f-3f25-449a-a718-86be5480a5e8",
+        "originalName": "image.png",
+        "src": "/api/projects/image-annotation-real/images/page-text-input-grows-really-want-to-just-edit-in-place/6e80d10f-3f25-449a-a718-86be5480a5e8.png",
+        "path": "/Users/byronwall/Projects/image-annotator/tmp/product-grid/page-problems/images/page-text-input-grows-really-want-to-just-edit-in-place-6e80d10f-3f25-449a-a718-86be5480a5e8.png"
+      },
+      {
+        "nodeId": "page-using-the-pen-outside-of-the-current-image-bounds-does-not-expand-image-to-include-it",
+        "imageId": "0242e4d0-77bb-4cd7-ba4f-383a9a8e208e",
+        "originalName": "image.png",
+        "src": "/api/projects/image-annotation-real/images/page-using-the-pen-outside-of-the-current-image-bounds-does-not-expand-image-to-include-it/0242e4d0-77bb-4cd7-ba4f-383a9a8e208e.png",
+        "path": "/Users/byronwall/Projects/image-annotator/tmp/product-grid/page-problems/images/page-using-the-pen-outside-of-the-current-image-bounds-does-not-expand-image-to-include-it-0242e4d0-77bb-4cd7-ba4f-383a9a8e208e.png"
+      }
+    ],
+    "failed": []
+  }
+}

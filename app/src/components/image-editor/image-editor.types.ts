@@ -17,7 +17,7 @@ export type ImageEditorTool =
 
 export type ImageEditorZoom = "fit" | number;
 
-export type ResizeHandle = "nw" | "ne" | "sw" | "se";
+export type ResizeHandle = "n" | "ne" | "e" | "se" | "s" | "sw" | "w" | "nw";
 
 export const toolLabels: Record<ImageEditorTool, string> = {
   select: "Select",
@@ -127,6 +127,8 @@ export type BaseImageData = {
   mimeType: string;
   width: number;
   height: number;
+  offsetX?: number;
+  offsetY?: number;
 };
 
 export type ImageEditorProject = {

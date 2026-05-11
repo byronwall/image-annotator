@@ -94,6 +94,7 @@ export const ImageEditorToolbar = (props: ImageEditorToolbarProps) => {
       borderBottomWidth="1px"
       borderColor="border"
       bg="bg.default"
+      flexShrink="0"
       flexWrap={{ base: "wrap", lg: "nowrap" }}
       overflowX="auto"
     >

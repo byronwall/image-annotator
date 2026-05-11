@@ -13,6 +13,7 @@ import { Badge } from "~/components/ui/badge";
 import {
   clampBoundsToProject,
   getAnnotationBounds,
+  getBaseImageOffset,
   getResizeHandleAt,
   hitTestAnnotation,
   loadImageElement,
@@ -475,6 +476,7 @@ export const ImageEditor = () => {
         "Added text",
       );
       setSelectedId(annotation.id);
+      startInlineEditFor(annotation.id, currentProject.annotations);
       return;
     }
 
@@ -694,16 +696,14 @@ export const ImageEditor = () => {
         return;
       }
 
+      const baseImageOffset = getBaseImageOffset(currentProject);
+
       context.drawImage(
         image,
-        bounds.x,
-        bounds.y,
-        bounds.width,
-        bounds.height,
-        0,
-        0,
-        bounds.width,
-        bounds.height,
+        baseImageOffset.x - bounds.x,
+        baseImageOffset.y - bounds.y,
+        image.naturalWidth,
+        image.naturalHeight,
       );
 
       const croppedBaseImage = canvas.toDataURL("image/png");
@@ -722,6 +722,8 @@ export const ImageEditor = () => {
             mimeType: "image/png",
             width: Math.round(bounds.width),
             height: Math.round(bounds.height),
+            offsetX: 0,
+            offsetY: 0,
           },
           annotations: adjustedAnnotations,
         },
@@ -937,7 +939,10 @@ export const ImageEditor = () => {
     }
   };
 
-  const startInlineEditFor = (id: string) => {
+  const startInlineEditFor = (
+    id: string,
+    originalAnnotations?: ImageAnnotation[],
+  ) => {
     const currentProject = project();
     const annotation = currentProject?.annotations.find((candidate) => candidate.id === id);
 
@@ -948,7 +953,9 @@ export const ImageEditor = () => {
     batch(() => {
       setSelectedId(id);
       setInlineEditingId(id);
-      setInlineEditOriginalAnnotations(structuredClone(currentProject.annotations));
+      setInlineEditOriginalAnnotations(
+        structuredClone(originalAnnotations ?? currentProject.annotations),
+      );
       setHasPendingInlineEdit(false);
     });
   };
@@ -1513,7 +1520,10 @@ export const ImageEditor = () => {
     <Box
       ref={shellRef}
       tabIndex={0}
-      minH="100dvh"
+      h="100dvh"
+      display="flex"
+      flexDirection="column"
+      overflow="hidden"
       bg="bg.canvas"
       color="fg.default"
       outline="none"
@@ -1550,7 +1560,9 @@ export const ImageEditor = () => {
       />
 
       <Flex
-        minH={{ base: "auto", lg: "calc(100dvh - 57px)" }}
+        flex="1"
+        minH="0"
+        overflow="hidden"
         direction={{ base: "column", lg: "row" }}
       >
         <Show when={isHistoryOpen()}>
@@ -1787,6 +1799,7 @@ const updateDraft = (
 const createTextAnnotation = (
   point: Point,
   settings: EditorSettings,
+  text = "",
 ): ImageAnnotation => ({
   id: createEditorId("layer"),
   type: "text",
@@ -1794,7 +1807,7 @@ const createTextAnnotation = (
   opacity: settings.opacity,
   x: point.x,
   y: point.y,
-  text: "Text",
+  text,
   color: settings.color,
   backgroundColor: settings.fillColor,
   fontSize: settings.fontSize,
@@ -1868,26 +1881,44 @@ const expandProjectToAnnotations = (
   project: ImageEditorProject,
 ): ImageEditorProject => {
   const padding = 24;
-  const maxBounds = project.annotations.reduce(
+  const contentBounds = project.annotations.reduce(
     (bounds, annotation) => {
       const annotationBounds = getAnnotationBounds(annotation);
 
       return {
-        width: Math.max(bounds.width, Math.ceil(annotationBounds.x + annotationBounds.width + padding)),
-        height: Math.max(bounds.height, Math.ceil(annotationBounds.y + annotationBounds.height + padding)),
+        minX: Math.min(bounds.minX, annotationBounds.x - padding),
+        minY: Math.min(bounds.minY, annotationBounds.y - padding),
+        maxX: Math.max(bounds.maxX, annotationBounds.x + annotationBounds.width + padding),
+        maxY: Math.max(bounds.maxY, annotationBounds.y + annotationBounds.height + padding),
       };
     },
-    { width: project.width, height: project.height },
+    { minX: 0, minY: 0, maxX: project.width, maxY: project.height },
   );
+  const shiftX = contentBounds.minX < 0 ? Math.ceil(-contentBounds.minX) : 0;
+  const shiftY = contentBounds.minY < 0 ? Math.ceil(-contentBounds.minY) : 0;
+  const width = Math.ceil(Math.max(project.width + shiftX, contentBounds.maxX + shiftX));
+  const height = Math.ceil(Math.max(project.height + shiftY, contentBounds.maxY + shiftY));
 
-  if (maxBounds.width === project.width && maxBounds.height === project.height) {
+  if (width === project.width && height === project.height && shiftX === 0 && shiftY === 0) {
     return project;
   }
 
   return {
     ...project,
-    width: maxBounds.width,
-    height: maxBounds.height,
+    width,
+    height,
+    baseImage:
+      shiftX === 0 && shiftY === 0
+        ? project.baseImage
+        : {
+            ...project.baseImage,
+            offsetX: (project.baseImage.offsetX ?? 0) + shiftX,
+            offsetY: (project.baseImage.offsetY ?? 0) + shiftY,
+          },
+    annotations:
+      shiftX === 0 && shiftY === 0
+        ? project.annotations
+        : project.annotations.map((annotation) => moveAnnotation(annotation, shiftX, shiftY)),
   };
 };
 

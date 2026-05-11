@@ -100,12 +100,13 @@ export const InlineAnnotationEditor = (props: InlineAnnotationEditorProps) => {
                 }
                 onBlur={props.onCommit}
                 onKeyDown={handleKeyDown}
+                width="full"
                 minW="40"
-                minH="12"
+                h="12"
                 bg="bg.default"
                 boxShadow="lg"
                 resize="none"
-                overflow="hidden"
+                overflowY="auto"
               />
             )}
           </Show>

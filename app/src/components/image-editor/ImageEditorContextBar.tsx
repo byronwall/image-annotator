@@ -8,7 +8,7 @@ import {
   Trash2,
 } from "lucide-solid";
 import { For, Show, type JSX } from "solid-js";
-import { Box, HStack, VStack } from "styled-system/jsx";
+import { Box, HStack } from "styled-system/jsx";
 import { Button } from "~/components/ui/button";
 import { IconButton } from "~/components/ui/icon-button";
 import { Tooltip } from "~/components/ui/tooltip";
@@ -75,23 +75,24 @@ export const ImageEditorContextBar = (props: ImageEditorContextBarProps) => {
     props.selectedAnnotation?.type === "step";
 
   return (
-    <VStack
-      alignItems="stretch"
+    <HStack
+      alignItems="center"
       gap="2"
       position="absolute"
       zIndex="10"
-      p="2"
+      p="1.5"
       borderRadius="l2"
       borderWidth="1px"
       borderColor="border"
       bg="bg.default"
       boxShadow="lg"
-      minW="64"
       maxW="calc(100% - 24px)"
+      overflowX="auto"
+      whiteSpace="nowrap"
       style={props.style}
     >
-      <HStack justifyContent="space-between" gap="2" minW="0">
-        <Box fontWeight="semibold" textStyle="sm" minW="0">
+      <HStack gap="2" minW="0" flexShrink="0">
+        <Box fontWeight="semibold" textStyle="sm" minW="0" maxW="28" overflow="hidden" textOverflow="ellipsis">
           {title()}
         </Box>
         <Show when={hasSelection()}>
@@ -153,7 +154,7 @@ export const ImageEditorContextBar = (props: ImageEditorContextBarProps) => {
         </Show>
       </HStack>
 
-      <HStack gap="2" flexWrap="wrap">
+      <HStack gap="2" flexWrap="nowrap" flexShrink="0">
         <For each={strokeSwatches}>
           {(swatch) => (
             <Tooltip content={swatch.label}>
@@ -167,6 +168,10 @@ export const ImageEditorContextBar = (props: ImageEditorContextBarProps) => {
                 borderColor={props.settings.color === swatch.value ? "blue.9" : "border"}
                 bg="bg.default"
                 p="1"
+                cursor="pointer"
+                transitionProperty="box-shadow, border-color"
+                transitionDuration="fast"
+                _hover={{ boxShadow: "sm", borderColor: "blue.7" }}
                 onClick={() => props.onSettingsChange({ color: swatch.value })}
               >
                 <Box
@@ -199,6 +204,10 @@ export const ImageEditorContextBar = (props: ImageEditorContextBarProps) => {
                   }
                   bg="bg.default"
                   p="1"
+                  cursor="pointer"
+                  transitionProperty="box-shadow, border-color"
+                  transitionDuration="fast"
+                  _hover={{ boxShadow: "sm", borderColor: "blue.7" }}
                   onClick={() => props.onSettingsChange({ fillColor: swatch.value })}
                 >
                   <Box
@@ -216,7 +225,7 @@ export const ImageEditorContextBar = (props: ImageEditorContextBarProps) => {
         </Show>
       </HStack>
 
-      <HStack gap="2" flexWrap="wrap">
+      <HStack gap="2" flexWrap="nowrap" flexShrink="0">
         <HStack gap="1">
           <Tooltip content="Thinner">
             <IconButton
@@ -277,7 +286,7 @@ export const ImageEditorContextBar = (props: ImageEditorContextBarProps) => {
         </Show>
       </HStack>
 
-      <HStack gap="1" flexWrap="wrap">
+      <HStack gap="1" flexWrap="nowrap" flexShrink="0">
         <Box textStyle="xs" color="fg.muted" mr="1">
           Opacity
         </Box>
@@ -294,6 +303,6 @@ export const ImageEditorContextBar = (props: ImageEditorContextBarProps) => {
           )}
         </For>
       </HStack>
-    </VStack>
+    </HStack>
   );
 };

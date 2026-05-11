@@ -67,6 +67,7 @@ export const renderImageEditorCanvas = (
   annotations: ImageAnnotation[],
   draft: EditorDraft | undefined,
   selectedId: string | undefined,
+  baseImageOffset: Point = { x: 0, y: 0 },
 ) => {
   const context = canvas.getContext("2d");
 
@@ -77,7 +78,13 @@ export const renderImageEditorCanvas = (
   context.clearRect(0, 0, canvas.width, canvas.height);
   context.save();
   context.imageSmoothingEnabled = true;
-  context.drawImage(baseImage, 0, 0, baseImage.naturalWidth, baseImage.naturalHeight);
+  context.drawImage(
+    baseImage,
+    baseImageOffset.x,
+    baseImageOffset.y,
+    baseImage.naturalWidth,
+    baseImage.naturalHeight,
+  );
   context.restore();
 
   for (const annotation of annotations) {
@@ -111,7 +118,14 @@ export const renderProjectToPngBlob = async (
   const canvas = document.createElement("canvas");
   canvas.width = project.width;
   canvas.height = project.height;
-  renderImageEditorCanvas(canvas, image, project.annotations, undefined, undefined);
+  renderImageEditorCanvas(
+    canvas,
+    image,
+    project.annotations,
+    undefined,
+    undefined,
+    getBaseImageOffset(project),
+  );
 
   return new Promise((resolve, reject) => {
     canvas.toBlob((blob) => {
@@ -124,6 +138,13 @@ export const renderProjectToPngBlob = async (
     }, "image/png");
   });
 };
+
+export const getBaseImageOffset = (
+  project: Pick<ImageEditorProject, "baseImage">,
+): Point => ({
+  x: project.baseImage.offsetX ?? 0,
+  y: project.baseImage.offsetY ?? 0,
+});
 
 export const getAnnotationBounds = (annotation: ImageAnnotation): Bounds => {
   switch (annotation.type) {
@@ -225,10 +246,10 @@ export const getResizeHandleAt = (
 
   for (const handle of handles) {
     if (
-      point.x >= handle.bounds.x &&
-      point.x <= handle.bounds.x + handle.bounds.width &&
-      point.y >= handle.bounds.y &&
-      point.y <= handle.bounds.y + handle.bounds.height
+      point.x >= handle.hitBounds.x &&
+      point.x <= handle.hitBounds.x + handle.hitBounds.width &&
+      point.y >= handle.hitBounds.y &&
+      point.y <= handle.hitBounds.y + handle.hitBounds.height
     ) {
       return handle.handle;
     }
@@ -252,13 +273,7 @@ export const resizeAnnotation = (
     return annotation;
   }
 
-  const fixed = getFixedResizeCorner(initialBounds, handle);
-  const nextBounds = normalizeRect(
-    fixed.x,
-    fixed.y,
-    point.x - fixed.x,
-    point.y - fixed.y,
-  );
+  const nextBounds = getResizedBounds(initialBounds, handle, point);
 
   return {
     ...annotation,
@@ -603,10 +618,10 @@ const drawSelection = (
     for (const handle of getResizeHandles(bounds)) {
       context.beginPath();
       context.rect(
-        handle.bounds.x,
-        handle.bounds.y,
-        handle.bounds.width,
-        handle.bounds.height,
+        handle.drawBounds.x,
+        handle.drawBounds.y,
+        handle.drawBounds.width,
+        handle.drawBounds.height,
       );
       context.fill();
       context.stroke();
@@ -619,15 +634,24 @@ const drawSelection = (
 const getResizeHandles = (bounds: Bounds) => {
   const size = resizeHandleSize;
   const half = size / 2;
+  const centerX = bounds.x + bounds.width / 2;
+  const centerY = bounds.y + bounds.height / 2;
 
   return [
     {
       handle: "nw" as const,
-      bounds: { x: bounds.x - half, y: bounds.y - half, width: size, height: size },
+      hitBounds: { x: bounds.x - half, y: bounds.y - half, width: size, height: size },
+      drawBounds: { x: bounds.x - half, y: bounds.y - half, width: size, height: size },
     },
     {
       handle: "ne" as const,
-      bounds: {
+      hitBounds: {
+        x: bounds.x + bounds.width - half,
+        y: bounds.y - half,
+        width: size,
+        height: size,
+      },
+      drawBounds: {
         x: bounds.x + bounds.width - half,
         y: bounds.y - half,
         width: size,
@@ -636,7 +660,13 @@ const getResizeHandles = (bounds: Bounds) => {
     },
     {
       handle: "sw" as const,
-      bounds: {
+      hitBounds: {
+        x: bounds.x - half,
+        y: bounds.y + bounds.height - half,
+        width: size,
+        height: size,
+      },
+      drawBounds: {
         x: bounds.x - half,
         y: bounds.y + bounds.height - half,
         width: size,
@@ -645,9 +675,75 @@ const getResizeHandles = (bounds: Bounds) => {
     },
     {
       handle: "se" as const,
-      bounds: {
+      hitBounds: {
         x: bounds.x + bounds.width - half,
         y: bounds.y + bounds.height - half,
+        width: size,
+        height: size,
+      },
+      drawBounds: {
+        x: bounds.x + bounds.width - half,
+        y: bounds.y + bounds.height - half,
+        width: size,
+        height: size,
+      },
+    },
+    {
+      handle: "n" as const,
+      hitBounds: {
+        x: bounds.x,
+        y: bounds.y - half,
+        width: bounds.width,
+        height: size,
+      },
+      drawBounds: {
+        x: centerX - half,
+        y: bounds.y - half,
+        width: size,
+        height: size,
+      },
+    },
+    {
+      handle: "e" as const,
+      hitBounds: {
+        x: bounds.x + bounds.width - half,
+        y: bounds.y,
+        width: size,
+        height: bounds.height,
+      },
+      drawBounds: {
+        x: bounds.x + bounds.width - half,
+        y: centerY - half,
+        width: size,
+        height: size,
+      },
+    },
+    {
+      handle: "s" as const,
+      hitBounds: {
+        x: bounds.x,
+        y: bounds.y + bounds.height - half,
+        width: bounds.width,
+        height: size,
+      },
+      drawBounds: {
+        x: centerX - half,
+        y: bounds.y + bounds.height - half,
+        width: size,
+        height: size,
+      },
+    },
+    {
+      handle: "w" as const,
+      hitBounds: {
+        x: bounds.x - half,
+        y: bounds.y,
+        width: size,
+        height: bounds.height,
+      },
+      drawBounds: {
+        x: bounds.x - half,
+        y: centerY - half,
         width: size,
         height: size,
       },
@@ -655,7 +751,55 @@ const getResizeHandles = (bounds: Bounds) => {
   ];
 };
 
-const getFixedResizeCorner = (bounds: Bounds, handle: ResizeHandle): Point => {
+const getResizedBounds = (
+  bounds: Bounds,
+  handle: ResizeHandle,
+  point: Point,
+): Bounds => {
+  const minSize = 4;
+
+  switch (handle) {
+    case "n": {
+      const bottom = bounds.y + bounds.height;
+      const y = Math.min(point.y, bottom - minSize);
+
+      return { ...bounds, y, height: bottom - y };
+    }
+    case "nw":
+      return getCornerResizedBounds(bounds, handle, point);
+    case "ne":
+      return getCornerResizedBounds(bounds, handle, point);
+    case "e":
+      return { ...bounds, width: Math.max(minSize, point.x - bounds.x) };
+    case "se":
+      return getCornerResizedBounds(bounds, handle, point);
+    case "s":
+      return { ...bounds, height: Math.max(minSize, point.y - bounds.y) };
+    case "sw":
+      return getCornerResizedBounds(bounds, handle, point);
+    case "w": {
+      const right = bounds.x + bounds.width;
+      const x = Math.min(point.x, right - minSize);
+
+      return { ...bounds, x, width: right - x };
+    }
+  }
+};
+
+const getCornerResizedBounds = (
+  bounds: Bounds,
+  handle: Extract<ResizeHandle, "nw" | "ne" | "sw" | "se">,
+  point: Point,
+): Bounds => {
+  const fixed = getFixedResizeCorner(bounds, handle);
+
+  return normalizeRect(fixed.x, fixed.y, point.x - fixed.x, point.y - fixed.y);
+};
+
+const getFixedResizeCorner = (
+  bounds: Bounds,
+  handle: Extract<ResizeHandle, "nw" | "ne" | "sw" | "se">,
+): Point => {
   switch (handle) {
     case "nw":
       return { x: bounds.x + bounds.width, y: bounds.y + bounds.height };
