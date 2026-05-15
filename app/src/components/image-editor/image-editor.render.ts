@@ -6,6 +6,7 @@ import {
   type ImageAnnotation,
   type ImageLayerAnnotation,
   type ImageEditorProject,
+  type MeasureAnnotation,
   type PathAnnotation,
   type Point,
   type ResizeHandle,
@@ -73,6 +74,7 @@ export const renderImageEditorCanvas = (
   selectedId: string | undefined,
   baseImageOffset: Point = { x: 0, y: 0 },
   hoveredId: string | undefined = undefined,
+  options: { backgroundColor?: string } = {},
 ) => {
   const context = canvas.getContext("2d");
 
@@ -81,6 +83,11 @@ export const renderImageEditorCanvas = (
   }
 
   context.clearRect(0, 0, canvas.width, canvas.height);
+  if (options.backgroundColor) {
+    context.fillStyle = options.backgroundColor;
+    context.fillRect(0, 0, canvas.width, canvas.height);
+  }
+
   context.save();
   context.imageSmoothingEnabled = true;
   context.drawImage(
@@ -125,6 +132,7 @@ export const renderImageEditorCanvas = (
 
 export const renderProjectToPngBlob = async (
   project: ImageEditorProject,
+  options: { backgroundColor?: string } = {},
 ): Promise<Blob> => {
   const image = await loadImageElement(project.baseImage.dataUrl);
   const canvas = document.createElement("canvas");
@@ -137,6 +145,8 @@ export const renderProjectToPngBlob = async (
     undefined,
     undefined,
     getBaseImageOffset(project),
+    undefined,
+    options,
   );
 
   return new Promise((resolve, reject) => {
@@ -187,6 +197,8 @@ export const getAnnotationBounds = (annotation: ImageAnnotation): Bounds => {
       return getTextBounds(annotation);
     case "step":
       return getStepBounds(annotation);
+    case "measure":
+      return getMeasureBounds(annotation);
     case "image":
       return normalizeRect(annotation.x, annotation.y, annotation.width, annotation.height);
   }
@@ -241,6 +253,12 @@ export const moveAnnotation = (
         ...annotation,
         x: annotation.x + deltaX,
         y: annotation.y + deltaY,
+      };
+    case "measure":
+      return {
+        ...annotation,
+        start: movePoint(annotation.start, deltaX, deltaY),
+        end: movePoint(annotation.end, deltaX, deltaY),
       };
     case "image":
       return {
@@ -346,6 +364,9 @@ const drawAnnotation = (
       break;
     case "step":
       drawStep(context, annotation);
+      break;
+    case "measure":
+      drawMeasure(context, annotation);
       break;
     case "image":
       drawImageLayer(context, annotation);
@@ -621,6 +642,167 @@ const drawStep = (
   context.fillText(annotation.label, annotation.x, annotation.y + 1);
   context.restore();
 };
+
+const drawMeasure = (
+  context: CanvasRenderingContext2D,
+  annotation: MeasureAnnotation,
+) => {
+  const length = Math.hypot(
+    annotation.end.x - annotation.start.x,
+    annotation.end.y - annotation.start.y,
+  );
+
+  if (length < 1) {
+    return;
+  }
+
+  const colorStops = detectColorStops(context, annotation, length);
+  const angle = Math.atan2(
+    annotation.end.y - annotation.start.y,
+    annotation.end.x - annotation.start.x,
+  );
+  const normal = {
+    x: Math.cos(angle + Math.PI / 2),
+    y: Math.sin(angle + Math.PI / 2),
+  };
+  const tickSize = Math.max(10, annotation.strokeWidth * 3);
+  const label = `${Math.round(length)} px`;
+  const midpoint = {
+    x: (annotation.start.x + annotation.end.x) / 2,
+    y: (annotation.start.y + annotation.end.y) / 2,
+  };
+
+  context.save();
+  context.globalAlpha = annotation.opacity;
+  context.strokeStyle = annotation.color;
+  context.fillStyle = annotation.color;
+  context.lineWidth = annotation.strokeWidth;
+  context.lineCap = "round";
+  context.lineJoin = "round";
+  context.beginPath();
+  context.moveTo(annotation.start.x, annotation.start.y);
+  context.lineTo(annotation.end.x, annotation.end.y);
+  context.stroke();
+
+  drawMeasureTick(context, annotation.start, normal, tickSize);
+  drawMeasureTick(context, annotation.end, normal, tickSize);
+
+  context.strokeStyle = "rgba(245, 158, 11, 0.95)";
+  context.fillStyle = "rgba(245, 158, 11, 0.95)";
+  context.lineWidth = Math.max(2, annotation.strokeWidth * 0.7);
+
+  for (const stop of colorStops) {
+    drawMeasureTick(context, stop, normal, tickSize * 0.62);
+  }
+
+  context.font = `700 13px ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
+  context.textAlign = "center";
+  context.textBaseline = "middle";
+  const labelX = midpoint.x + normal.x * 18;
+  const labelY = midpoint.y + normal.y * 18;
+  const metrics = context.measureText(label);
+  const labelWidth = metrics.width + 16;
+  const labelHeight = 24;
+
+  context.fillStyle = "rgba(255, 255, 255, 0.94)";
+  context.strokeStyle = "rgba(15, 23, 42, 0.18)";
+  context.lineWidth = 1;
+  drawRoundRect(
+    context,
+    labelX - labelWidth / 2,
+    labelY - labelHeight / 2,
+    labelWidth,
+    labelHeight,
+    8,
+  );
+  context.fill();
+  context.stroke();
+  context.fillStyle = annotation.color;
+  context.fillText(label, labelX, labelY + 0.5);
+  context.restore();
+};
+
+const drawMeasureTick = (
+  context: CanvasRenderingContext2D,
+  point: Point,
+  normal: Point,
+  size: number,
+) => {
+  context.beginPath();
+  context.moveTo(point.x - normal.x * size * 0.5, point.y - normal.y * size * 0.5);
+  context.lineTo(point.x + normal.x * size * 0.5, point.y + normal.y * size * 0.5);
+  context.stroke();
+};
+
+const detectColorStops = (
+  context: CanvasRenderingContext2D,
+  annotation: MeasureAnnotation,
+  length: number,
+): Point[] => {
+  if (length < 6) {
+    return [];
+  }
+
+  const maxSamples = Math.min(Math.round(length), 700);
+  const step = length / maxSamples;
+  const stops: Point[] = [];
+  let previous = sampleCanvasPixel(context, annotation.start);
+  let lastStopDistance = -Infinity;
+
+  for (let index = 1; index <= maxSamples; index += 1) {
+    const distance = index * step;
+    const ratio = distance / length;
+    const point = {
+      x: annotation.start.x + (annotation.end.x - annotation.start.x) * ratio,
+      y: annotation.start.y + (annotation.end.y - annotation.start.y) * ratio,
+    };
+    const current = sampleCanvasPixel(context, point);
+
+    if (
+      previous &&
+      current &&
+      colorDistance(previous, current) >= 44 &&
+      distance - lastStopDistance >= 5
+    ) {
+      stops.push(point);
+      lastStopDistance = distance;
+    }
+
+    previous = current;
+  }
+
+  return stops.slice(0, 16);
+};
+
+const sampleCanvasPixel = (
+  context: CanvasRenderingContext2D,
+  point: Point,
+): [number, number, number] | undefined => {
+  const x = Math.round(point.x);
+  const y = Math.round(point.y);
+
+  if (x < 0 || y < 0 || x >= context.canvas.width || y >= context.canvas.height) {
+    return undefined;
+  }
+
+  try {
+    const pixel = context.getImageData(x, y, 1, 1).data;
+
+    return [pixel[0] ?? 0, pixel[1] ?? 0, pixel[2] ?? 0];
+  } catch {
+    return undefined;
+  }
+};
+
+const colorDistance = (
+  first: [number, number, number],
+  second: [number, number, number],
+) =>
+  Math.hypot(
+    first[0] - second[0],
+    first[1] - second[1],
+    first[2] - second[2],
+  );
 
 const drawCropDraft = (
   context: CanvasRenderingContext2D,
@@ -961,6 +1143,21 @@ const getStepBounds = (annotation: StepAnnotation): Bounds => ({
   width: annotation.size,
   height: annotation.size,
 });
+
+const getMeasureBounds = (annotation: MeasureAnnotation): Bounds => {
+  const padding = Math.max(32, annotation.strokeWidth * 8);
+  const minX = Math.min(annotation.start.x, annotation.end.x) - padding;
+  const minY = Math.min(annotation.start.y, annotation.end.y) - padding;
+  const maxX = Math.max(annotation.start.x, annotation.end.x) + padding;
+  const maxY = Math.max(annotation.start.y, annotation.end.y) + padding;
+
+  return {
+    x: minX,
+    y: minY,
+    width: maxX - minX,
+    height: maxY - minY,
+  };
+};
 
 const expandBounds = (bounds: Bounds, amount: number): Bounds => ({
   x: bounds.x - amount,

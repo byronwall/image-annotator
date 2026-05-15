@@ -12,6 +12,8 @@ import { Box, HStack, VStack } from "styled-system/jsx";
 import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
 import { IconButton } from "~/components/ui/icon-button";
+import { Image } from "~/components/ui/image";
+import { Link } from "~/components/ui/link";
 import { Text } from "~/components/ui/text";
 import { Tooltip } from "~/components/ui/tooltip";
 import { HistoryIcon } from "./ImageEditorToolbar";
@@ -33,6 +35,18 @@ export type ImageEditorSidebarProps = {
   onSendLayerBackward: (id: string) => void;
   onDeleteLayer: (id: string) => void;
   onJumpHistory: (index: number) => void;
+  savedImages: SavedImageSummary[];
+  onRefreshSavedImages: () => void;
+};
+
+export type SavedImageSummary = {
+  id: string;
+  name: string;
+  createdAt: string;
+  size: number;
+  width: number;
+  height: number;
+  url: string;
 };
 
 export const ImageEditorSidebar = (props: ImageEditorSidebarProps) => {
@@ -157,6 +171,68 @@ export const ImageEditorSidebar = (props: ImageEditorSidebarProps) => {
                       </Text>
                     </VStack>
                   </Button>
+                </Box>
+              )}
+            </For>
+          </VStack>
+        </Show>
+      </VStack>
+
+      <VStack alignItems="stretch" gap="3">
+        <HStack alignItems="center" justifyContent="space-between">
+          <Box fontWeight="semibold">Saved images</Box>
+          <Button size="2xs" variant="surface" onClick={props.onRefreshSavedImages}>
+            Refresh
+          </Button>
+        </HStack>
+
+        <Show
+          when={props.savedImages.length > 0}
+          fallback={
+            <Text color="fg.muted" textStyle="sm">
+              Server-saved PNGs will appear here.
+            </Text>
+          }
+        >
+          <VStack alignItems="stretch" gap="2">
+            <For each={props.savedImages}>
+              {(image) => (
+                <Box
+                  borderWidth="1px"
+                  borderColor="border"
+                  borderRadius="l2"
+                  bg="bg.subtle"
+                  overflow="hidden"
+                >
+                  <Link
+                    href={image.url}
+                    target="_blank"
+                    rel="noreferrer"
+                    display="block"
+                    bg="bg.default"
+                  >
+                    <Image
+                      src={image.url}
+                      alt={image.name}
+                      width="full"
+                      height="24"
+                      fit="contain"
+                    />
+                  </Link>
+                  <VStack alignItems="stretch" gap="1" p="2">
+                    <Box
+                      textStyle="sm"
+                      fontWeight="semibold"
+                      overflow="hidden"
+                      textOverflow="ellipsis"
+                      whiteSpace="nowrap"
+                    >
+                      {image.name}
+                    </Box>
+                    <Text as="span" color="fg.muted" textStyle="xs">
+                      {image.width} x {image.height} / {formatFileSize(image.size)}
+                    </Text>
+                  </VStack>
                 </Box>
               )}
             </For>
@@ -304,4 +380,16 @@ const formatHistoryTime = (timestamp: number) => {
   const seconds = date.getSeconds().toString().padStart(2, "0");
 
   return `${hours}:${minutes}:${seconds}`;
+};
+
+const formatFileSize = (bytes: number) => {
+  if (bytes < 1024) {
+    return `${bytes} B`;
+  }
+
+  if (bytes < 1024 * 1024) {
+    return `${Math.round(bytes / 1024)} KB`;
+  }
+
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 };

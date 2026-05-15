@@ -26,7 +26,7 @@ import {
   type Bounds,
 } from "./image-editor.render";
 import { ImageEditorCanvas } from "./ImageEditorCanvas";
-import { ImageEditorSidebar } from "./ImageEditorSidebar";
+import { ImageEditorSidebar, type SavedImageSummary } from "./ImageEditorSidebar";
 import { ImageEditorToolbar } from "./ImageEditorToolbar";
 import {
   appendPngDataToBlob,
@@ -103,6 +103,10 @@ type PngExport = {
   payload: ImageEditorPngPayload;
 };
 
+type CommitProjectOptions = {
+  fitToContent?: boolean;
+};
+
 export const ImageEditor = () => {
   let fileInputRef: HTMLInputElement | undefined;
   let shellRef: HTMLDivElement | undefined;
@@ -118,6 +122,7 @@ export const ImageEditor = () => {
   const [interaction, setInteraction] = createSignal<EditorInteraction>();
   const [isExporting, setIsExporting] = createSignal(false);
   const [isCopying, setIsCopying] = createSignal(false);
+  const [isSaving, setIsSaving] = createSignal(false);
   const [isHistoryOpen, setIsHistoryOpen] = createSignal(true);
   const [status, setStatus] = createSignal("Ready for paste, drop, or import.");
   const [zoom, setZoom] = createSignal<ImageEditorZoom>("fit");
@@ -128,6 +133,8 @@ export const ImageEditor = () => {
     createSignal<ImageAnnotation[]>();
   const [hasPendingInlineEdit, setHasPendingInlineEdit] = createSignal(false);
   const [isShortcutsOpen, setIsShortcutsOpen] = createSignal(false);
+  const [isBeforeAfterMode, setIsBeforeAfterMode] = createSignal(false);
+  const [savedImages, setSavedImages] = createSignal<SavedImageSummary[]>([]);
   let keyboardNudgeTimer: number | undefined;
 
   const selectedAnnotation = createMemo(() =>
@@ -183,6 +190,7 @@ export const ImageEditor = () => {
 
   onMount(() => {
     shellRef?.focus();
+    void loadSavedImages();
 
     const handlePaste = (event: ClipboardEvent) => {
       void handleClipboardPaste(event);
@@ -247,21 +255,27 @@ export const ImageEditor = () => {
     }
 
     clearKeyboardNudgeTimer();
-    commitCurrentProject("Nudged layer");
+    commitCurrentProject("Nudged layer", { fitToContent: true });
   };
 
   const scheduleKeyboardNudgeCommit = () => {
     clearKeyboardNudgeTimer();
     keyboardNudgeTimer = window.setTimeout(() => {
       keyboardNudgeTimer = undefined;
-      commitCurrentProject("Nudged layer");
+      commitCurrentProject("Nudged layer", { fitToContent: true });
     }, 350);
   };
 
-  const commitProject = (nextProject: ImageEditorProject, label: string) => {
+  const commitProject = (
+    nextProject: ImageEditorProject,
+    label: string,
+    options: CommitProjectOptions = {},
+  ) => {
     clearKeyboardNudgeTimer();
     const timestamp = Date.now();
-    const expandedProject = expandProjectToAnnotations(nextProject);
+    const expandedProject = options.fitToContent
+      ? fitProjectToContent(nextProject)
+      : expandProjectToAnnotations(nextProject);
     const snapshot = cloneProject({
       ...expandedProject,
       updatedAt: timestamp,
@@ -285,14 +299,17 @@ export const ImageEditor = () => {
     });
   };
 
-  const commitCurrentProject = (label: string) => {
+  const commitCurrentProject = (
+    label: string,
+    options: CommitProjectOptions = {},
+  ) => {
     const currentProject = project();
 
     if (!currentProject) {
       return;
     }
 
-    commitProject(currentProject, label);
+    commitProject(currentProject, label, options);
   };
 
   const restoreHistoryEntry = (index: number) => {
@@ -421,11 +438,6 @@ export const ImageEditor = () => {
   const handleToolChange = (tool: ImageEditorTool) => {
     if (inlineEditingId()) {
       commitPendingInlineEdit();
-      batch(() => {
-        setInlineEditingId(undefined);
-        setInlineEditOriginalAnnotations(undefined);
-        setHasPendingInlineEdit(false);
-      });
     }
 
     batch(() => {
@@ -843,7 +855,9 @@ export const ImageEditor = () => {
       return;
     }
 
-    commitProject(currentProject, currentInteraction.commitLabel ?? "Moved layer");
+    commitProject(currentProject, currentInteraction.commitLabel ?? "Moved layer", {
+      fitToContent: true,
+    });
   };
 
   const finishResizeInteraction = (
@@ -870,7 +884,7 @@ export const ImageEditor = () => {
       return;
     }
 
-    commitProject(currentProject, "Resized layer");
+    commitProject(currentProject, "Resized layer", { fitToContent: true });
   };
 
   const finishCropAdjustment = (
@@ -1039,7 +1053,9 @@ export const ImageEditor = () => {
 
     try {
       setIsExporting(true);
-      const renderedBlob = await renderProjectToPngBlob(currentProject);
+      const renderedBlob = await renderProjectToPngBlob(currentProject, {
+        backgroundColor: "#ffffff",
+      });
       const payload = createPngDataPayload(
         currentProject,
         history().slice(0, historyIndex() + 1),
@@ -1062,6 +1078,79 @@ export const ImageEditor = () => {
   const handleCopy = () => {
     setIsCopying(true);
     void copyPng().finally(() => setIsCopying(false));
+  };
+
+  const loadSavedImages = async () => {
+    try {
+      const response = await fetch("/api/image-editor/saved-images");
+
+      if (!response.ok) {
+        throw new Error("Unable to load saved images.");
+      }
+
+      const payload = (await response.json()) as { images?: SavedImageSummary[] };
+      setSavedImages(payload.images ?? []);
+    } catch {
+      setSavedImages([]);
+    }
+  };
+
+  const saveImageToServer = async () => {
+    setIsSaving(true);
+
+    try {
+      const pngExport = await buildPngExport();
+      const currentProject = project();
+
+      if (!pngExport || !currentProject) {
+        return;
+      }
+
+      const formData = new FormData();
+      formData.append(
+        "file",
+        pngExport.blob,
+        `${downloadBaseName(currentProject.name)}-annotated.png`,
+      );
+      formData.append(
+        "metadata",
+        JSON.stringify({
+          name: currentProject.name,
+          width: currentProject.width,
+          height: currentProject.height,
+        }),
+      );
+
+      const response = await fetch("/api/image-editor/saved-images", {
+        method: "POST",
+        body: formData,
+      });
+
+      if (!response.ok) {
+        throw new Error("Unable to save image.");
+      }
+
+      const payload = (await response.json()) as {
+        image?: SavedImageSummary;
+        images?: SavedImageSummary[];
+      };
+
+      if (payload.images) {
+        setSavedImages(payload.images);
+      } else if (payload.image) {
+        setSavedImages((images) => [payload.image as SavedImageSummary, ...images]);
+      }
+
+      setStatus("Saved PNG to server.");
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Unable to save image.");
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const handleSave = () => {
+    void saveImageToServer();
   };
 
   const handleZoomChange = (nextZoom: ImageEditorZoom) => {
@@ -1089,6 +1178,26 @@ export const ImageEditor = () => {
 
   const fitZoom = () => {
     handleZoomChange("fit");
+  };
+
+  const expandCanvas = () => {
+    const currentProject = project();
+
+    if (!currentProject) {
+      return;
+    }
+
+    commitProject(padProjectCanvas(currentProject, 128), "Expanded canvas");
+  };
+
+  const trimCanvas = () => {
+    const currentProject = project();
+
+    if (!currentProject) {
+      return;
+    }
+
+    commitProject(currentProject, "Trimmed canvas", { fitToContent: true });
   };
 
   const undoHistory = () => {
@@ -1147,6 +1256,33 @@ export const ImageEditor = () => {
   };
 
   const commitPendingInlineEdit = () => {
+    const id = inlineEditingId();
+    const currentProject = project();
+    const annotation = currentProject?.annotations.find((candidate) => candidate.id === id);
+
+    if (
+      currentProject &&
+      annotation?.type === "text" &&
+      annotation.text.trim().length === 0
+    ) {
+      setHasPendingInlineEdit(false);
+      setInlineEditingId(undefined);
+      setInlineEditOriginalAnnotations(undefined);
+      setActiveTool("select");
+      commitProject(
+        {
+          ...currentProject,
+          annotations: currentProject.annotations.filter(
+            (candidate) => candidate.id !== annotation.id,
+          ),
+        },
+        "Removed empty text",
+        { fitToContent: true },
+      );
+      setSelectedId(undefined);
+      return;
+    }
+
     if (!hasPendingInlineEdit()) {
       setInlineEditingId(undefined);
       setInlineEditOriginalAnnotations(undefined);
@@ -1156,7 +1292,22 @@ export const ImageEditor = () => {
     setHasPendingInlineEdit(false);
     setInlineEditingId(undefined);
     setInlineEditOriginalAnnotations(undefined);
-    commitCurrentProject("Edited layer");
+    setActiveTool("select");
+    commitCurrentProject("Edited layer", { fitToContent: true });
+  };
+
+  const finishInlineEditFromCanvasPointer = () => {
+    if (!inlineEditingId()) {
+      return false;
+    }
+
+    commitPendingInlineEdit();
+    batch(() => {
+      setSelectedId(undefined);
+      setActiveTool("select");
+    });
+
+    return true;
   };
 
   const cancelInlineEdit = () => {
@@ -1347,6 +1498,49 @@ export const ImageEditor = () => {
     return true;
   };
 
+  const createBeforeAfterTemplate = async (
+    currentProject: ImageEditorProject,
+    afterImage: HTMLImageElement,
+    fileName: string,
+  ) => {
+    const beforeBlob = await renderProjectToPngBlob(currentProject, {
+      backgroundColor: "#ffffff",
+    });
+    const beforeDataUrl = await blobToDataUrl(beforeBlob);
+    const beforeImage = await loadImageElement(beforeDataUrl);
+    const now = Date.now();
+    const frame = createBeforeAfterFrame(beforeImage, afterImage);
+    const nextProject: ImageEditorProject = {
+      version: 1,
+      id: createEditorId("project"),
+      name: `${downloadBaseName(fileName || currentProject.name)}-before-after`,
+      width: frame.width,
+      height: frame.height,
+      baseImage: {
+        dataUrl: frame.dataUrl,
+        mimeType: "image/png",
+        width: frame.width,
+        height: frame.height,
+        offsetX: 0,
+        offsetY: 0,
+      },
+      annotations: [],
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    batch(() => {
+      setIsBeforeAfterMode(false);
+      setSelectedId(undefined);
+      setDraft(undefined);
+      setInteraction(undefined);
+      setInlineEditingId(undefined);
+      setActiveTool("select");
+      setZoom("fit");
+    });
+    commitProject(nextProject, "Created before/after frame");
+  };
+
   const handlePastedImage = async (
     file: File | undefined,
     pngDataFallback?: ImageEditorPngPayload,
@@ -1378,6 +1572,12 @@ export const ImageEditor = () => {
     try {
       const dataUrl = await readFileAsDataUrl(file);
       const image = await loadImageElement(dataUrl);
+
+      if (isBeforeAfterMode()) {
+        await createBeforeAfterTemplate(currentProject, image, file.name);
+        return;
+      }
+
       const maxWidth = Math.max(80, currentProject.width * 0.45);
       const maxHeight = Math.max(80, currentProject.height * 0.45);
       const scale = Math.min(1, maxWidth / image.naturalWidth, maxHeight / image.naturalHeight);
@@ -1815,7 +2015,9 @@ export const ImageEditor = () => {
         canRedo={canRedo()}
         isExporting={isExporting()}
         isCopying={isCopying()}
+        isSaving={isSaving()}
         isHistoryOpen={isHistoryOpen()}
+        isBeforeAfterMode={isBeforeAfterMode()}
         zoom={zoom()}
         onToolChange={handleToolChange}
         onToggleHistory={() => setIsHistoryOpen((value) => !value)}
@@ -1826,6 +2028,18 @@ export const ImageEditor = () => {
         onZoomOut={zoomOut}
         onZoomFit={fitZoom}
         onZoomReset={resetZoom}
+        onExpandCanvas={expandCanvas}
+        onTrimCanvas={trimCanvas}
+        onToggleBeforeAfterMode={() => {
+          const nextMode = !isBeforeAfterMode();
+          setIsBeforeAfterMode(nextMode);
+          setStatus(
+            nextMode
+              ? "Next pasted image will be framed as before/after."
+              : "Before/after framing off.",
+          );
+        }}
+        onSave={handleSave}
         onExport={handleExport}
         onCopy={handleCopy}
         onShowShortcuts={() => setIsShortcutsOpen(true)}
@@ -1853,6 +2067,8 @@ export const ImageEditor = () => {
               commitPendingKeyboardNudge();
               restoreHistoryEntry(index);
             }}
+            savedImages={savedImages()}
+            onRefreshSavedImages={() => void loadSavedImages()}
           />
         </Show>
         <ImageEditorCanvas
@@ -1941,7 +2157,7 @@ export const ImageEditor = () => {
           >
             <Box fontWeight="semibold" mb="3">Keyboard shortcuts</Box>
             <Flex gap="2" direction="column" textStyle="sm">
-              <ShortcutRow keys="V A R O P H T S X C" label="Choose tools" />
+              <ShortcutRow keys="V A R O P H T S M X C" label="Choose tools" />
               <ShortcutRow keys="+ / -" label="Zoom in or out" />
               <ShortcutRow keys="Mouse wheel" label="Zoom around cursor" />
               <ShortcutRow keys="Middle drag / Space drag" label="Pan viewport" />
@@ -1974,9 +2190,10 @@ const createDraftAnnotation = (
 
   switch (tool) {
     case "arrow":
+    case "measure":
       return {
         id,
-        type: "arrow",
+        type: tool,
         createdAt,
         opacity: settings.opacity,
         start: point,
@@ -2035,6 +2252,7 @@ const updateDraft = (
 ): EditorDraft => {
   switch (draft.type) {
     case "arrow":
+    case "measure":
       return {
         ...draft,
         end: options.constrain ? constrainPointTo45Degrees(start, point) : point,
@@ -2111,6 +2329,7 @@ const createStepAnnotation = (
 const isUsableDraft = (draft: EditorDraft) => {
   switch (draft.type) {
     case "arrow":
+    case "measure":
       return distance(draft.start, draft.end) >= 8;
     case "rectangle":
     case "ellipse":
@@ -2183,6 +2402,76 @@ const annotationTypeLabel = (annotation: ImageAnnotation | EditorDraft) =>
 const expandProjectToAnnotations = (
   project: ImageEditorProject,
 ): ImageEditorProject => expandProjectToContent(project).project;
+
+const fitProjectToContent = (project: ImageEditorProject): ImageEditorProject => {
+  const padding = 24;
+  const baseOffset = getBaseImageOffset(project);
+  const baseBounds = {
+    minX: baseOffset.x,
+    minY: baseOffset.y,
+    maxX: baseOffset.x + project.baseImage.width,
+    maxY: baseOffset.y + project.baseImage.height,
+  };
+  const contentBounds = project.annotations.reduce(
+    (bounds, annotation) => {
+      const annotationBounds = getAnnotationBounds(annotation);
+
+      return {
+        minX: Math.min(bounds.minX, annotationBounds.x - padding),
+        minY: Math.min(bounds.minY, annotationBounds.y - padding),
+        maxX: Math.max(bounds.maxX, annotationBounds.x + annotationBounds.width + padding),
+        maxY: Math.max(bounds.maxY, annotationBounds.y + annotationBounds.height + padding),
+      };
+    },
+    baseBounds,
+  );
+  const minX = Math.floor(Math.max(0, contentBounds.minX));
+  const minY = Math.floor(Math.max(0, contentBounds.minY));
+  const maxX = Math.ceil(Math.min(project.width, contentBounds.maxX));
+  const maxY = Math.ceil(Math.min(project.height, contentBounds.maxY));
+  const nextWidth = Math.max(1, maxX - minX);
+  const nextHeight = Math.max(1, maxY - minY);
+
+  if (
+    minX === 0 &&
+    minY === 0 &&
+    nextWidth === project.width &&
+    nextHeight === project.height
+  ) {
+    return expandProjectToAnnotations(project);
+  }
+
+  return expandProjectToAnnotations({
+    ...project,
+    width: nextWidth,
+    height: nextHeight,
+    baseImage: {
+      ...project.baseImage,
+      offsetX: baseOffset.x - minX,
+      offsetY: baseOffset.y - minY,
+    },
+    annotations: project.annotations.map((annotation) =>
+      moveAnnotation(annotation, -minX, -minY),
+    ),
+  });
+};
+
+const padProjectCanvas = (
+  project: ImageEditorProject,
+  padding: number,
+): ImageEditorProject => ({
+  ...project,
+  width: project.width + padding * 2,
+  height: project.height + padding * 2,
+  baseImage: {
+    ...project.baseImage,
+    offsetX: (project.baseImage.offsetX ?? 0) + padding,
+    offsetY: (project.baseImage.offsetY ?? 0) + padding,
+  },
+  annotations: project.annotations.map((annotation) =>
+    moveAnnotation(annotation, padding, padding),
+  ),
+});
 
 const expandProjectForInteraction = (
   project: ImageEditorProject,
@@ -2315,6 +2604,7 @@ const applySettingsToAnnotation = (
 ): ImageAnnotation => {
   switch (annotation.type) {
     case "arrow":
+    case "measure":
       return {
         ...annotation,
         color: settings.color,
@@ -2371,6 +2661,7 @@ const settingsFromAnnotation = (
 ): EditorSettings => {
   switch (annotation.type) {
     case "arrow":
+    case "measure":
       return {
         ...fallback,
         color: annotation.color,
@@ -2449,6 +2740,8 @@ const toolFromShortcut = (key: string): ImageEditorTool | undefined => {
       return "text";
     case "s":
       return "step";
+    case "m":
+      return "measure";
     case "x":
       return "pixelate";
     case "c":
@@ -2587,6 +2880,140 @@ const getGestureRect = (
     height: deltaY,
   };
 };
+
+const createBeforeAfterFrame = (
+  beforeImage: HTMLImageElement,
+  afterImage: HTMLImageElement,
+) => {
+  const margin = 48;
+  const gap = 32;
+  const labelHeight = 40;
+  const imagePadding = 18;
+  const maxImageWidth = 760;
+  const maxImageHeight = 620;
+  const beforeSize = fitImageSize(
+    beforeImage.naturalWidth,
+    beforeImage.naturalHeight,
+    maxImageWidth,
+    maxImageHeight,
+  );
+  const afterSize = fitImageSize(
+    afterImage.naturalWidth,
+    afterImage.naturalHeight,
+    maxImageWidth,
+    maxImageHeight,
+  );
+  const frameWidth = Math.max(beforeSize.width, afterSize.width) + imagePadding * 2;
+  const frameHeight =
+    Math.max(beforeSize.height, afterSize.height) + imagePadding * 2 + labelHeight;
+  const width = margin * 2 + frameWidth * 2 + gap;
+  const height = margin * 2 + frameHeight;
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.round(width);
+  canvas.height = Math.round(height);
+  const context = canvas.getContext("2d");
+
+  if (!context) {
+    throw new Error("Unable to create before/after frame.");
+  }
+
+  context.fillStyle = "#ffffff";
+  context.fillRect(0, 0, canvas.width, canvas.height);
+  drawBeforeAfterPanel(
+    context,
+    beforeImage,
+    beforeSize,
+    "Before",
+    margin,
+    margin,
+    frameWidth,
+    frameHeight,
+    imagePadding,
+    labelHeight,
+  );
+
+  drawBeforeAfterPanel(
+    context,
+    afterImage,
+    afterSize,
+    "After",
+    margin + frameWidth + gap,
+    margin,
+    frameWidth,
+    frameHeight,
+    imagePadding,
+    labelHeight,
+  );
+
+  return {
+    width: canvas.width,
+    height: canvas.height,
+    dataUrl: canvas.toDataURL("image/png"),
+  };
+};
+
+const fitImageSize = (
+  width: number,
+  height: number,
+  maxWidth: number,
+  maxHeight: number,
+) => {
+  const scale = Math.min(1, maxWidth / width, maxHeight / height);
+
+  return {
+    width: Math.max(1, Math.round(width * scale)),
+    height: Math.max(1, Math.round(height * scale)),
+  };
+};
+
+const drawBeforeAfterPanel = (
+  context: CanvasRenderingContext2D,
+  image: HTMLImageElement,
+  imageSize: { width: number; height: number },
+  label: string,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  imagePadding: number,
+  labelHeight: number,
+) => {
+  context.save();
+  context.fillStyle = "#f8fafc";
+  context.strokeStyle = "#cbd5e1";
+  context.lineWidth = 2;
+  context.beginPath();
+  context.roundRect(x, y, width, height, 12);
+  context.fill();
+  context.stroke();
+
+  context.fillStyle = "#0f172a";
+  context.font = "700 18px ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif";
+  context.textAlign = "center";
+  context.textBaseline = "middle";
+  context.fillText(label, x + width / 2, y + labelHeight / 2);
+
+  const imageX = x + (width - imageSize.width) / 2;
+  const imageY =
+    y + labelHeight + imagePadding + (height - labelHeight - imagePadding * 2 - imageSize.height) / 2;
+  context.drawImage(image, imageX, imageY, imageSize.width, imageSize.height);
+  context.restore();
+};
+
+const blobToDataUrl = (blob: Blob): Promise<string> =>
+  new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === "string") {
+        resolve(reader.result);
+        return;
+      }
+
+      reject(new Error("Unable to read rendered image."));
+    };
+    reader.onerror = () => reject(new Error("Unable to read rendered image."));
+    reader.readAsDataURL(blob);
+  });
 
 const downloadBaseName = (name: string) => {
   const withoutExtension = name.replace(/\.[^.]+$/, "");

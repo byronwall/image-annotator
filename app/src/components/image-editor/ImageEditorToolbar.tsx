@@ -1,6 +1,7 @@
 import {
   ArrowUpRight,
   Circle,
+  Columns2,
   Copy,
   Crop,
   Download,
@@ -10,9 +11,12 @@ import {
   Keyboard,
   ListOrdered,
   Maximize2,
+  Minimize2,
   MousePointer2,
   PenLine,
   Redo2,
+  Ruler,
+  Save,
   Square,
   Type,
   Undo2,
@@ -40,6 +44,7 @@ const primaryTools: ImageEditorTool[] = [
   "highlighter",
   "text",
   "step",
+  "measure",
   "pixelate",
   "crop",
 ];
@@ -53,6 +58,7 @@ const toolShortcuts: Record<ImageEditorTool, string> = {
   highlighter: "H",
   text: "T",
   step: "S",
+  measure: "M",
   pixelate: "X",
   crop: "C",
 };
@@ -64,7 +70,9 @@ export type ImageEditorToolbarProps = {
   canRedo: boolean;
   isExporting: boolean;
   isCopying: boolean;
+  isSaving: boolean;
   isHistoryOpen: boolean;
+  isBeforeAfterMode: boolean;
   zoom: ImageEditorZoom;
   onToolChange: (tool: ImageEditorTool) => void;
   onToggleHistory: () => void;
@@ -75,6 +83,10 @@ export type ImageEditorToolbarProps = {
   onZoomOut: () => void;
   onZoomFit: () => void;
   onZoomReset: () => void;
+  onExpandCanvas: () => void;
+  onTrimCanvas: () => void;
+  onToggleBeforeAfterMode: () => void;
+  onSave: () => void;
   onExport: () => void;
   onCopy: () => void;
   onShowShortcuts: () => void;
@@ -213,9 +225,53 @@ export const ImageEditorToolbar = (props: ImageEditorToolbarProps) => {
             <Keyboard />
           </IconButton>
         </Tooltip>
+        <Tooltip content="Expand canvas">
+          <IconButton
+            aria-label="Expand canvas"
+            size="sm"
+            variant="surface"
+            disabled={!props.hasProject}
+            onClick={props.onExpandCanvas}
+          >
+            <Maximize2 />
+          </IconButton>
+        </Tooltip>
+        <Tooltip content="Trim canvas to content">
+          <IconButton
+            aria-label="Trim canvas to content"
+            size="sm"
+            variant="surface"
+            disabled={!props.hasProject}
+            onClick={props.onTrimCanvas}
+          >
+            <Minimize2 />
+          </IconButton>
+        </Tooltip>
+        <Tooltip content="Frame next pasted image as before/after">
+          <IconButton
+            aria-label="Frame next pasted image as before/after"
+            size="sm"
+            variant={props.isBeforeAfterMode ? "solid" : "surface"}
+            colorPalette={props.isBeforeAfterMode ? "blue" : "gray"}
+            disabled={!props.hasProject}
+            onClick={props.onToggleBeforeAfterMode}
+          >
+            <Columns2 />
+          </IconButton>
+        </Tooltip>
         <Button size="sm" variant="surface" onClick={props.onChooseFile}>
           <Upload />
           Import
+        </Button>
+        <Button
+          size="sm"
+          variant="surface"
+          disabled={!props.hasProject}
+          loading={props.isSaving}
+          onClick={props.onSave}
+        >
+          <Save />
+          Save
         </Button>
         <Button
           size="sm"
@@ -260,6 +316,8 @@ const renderToolIcon = (tool: ImageEditorTool): JSX.Element => {
       return <Type />;
     case "step":
       return <ListOrdered />;
+    case "measure":
+      return <Ruler />;
     case "pixelate":
       return <Grid2X2 />;
     case "crop":

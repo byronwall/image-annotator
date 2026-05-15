@@ -101,7 +101,7 @@ export const ImageEditorCanvas = (props: ImageEditorCanvasProps) => {
   const [panDrag, setPanDrag] = createSignal<PanDrag>();
   const [inlineEditAnchor, setInlineEditAnchor] = createSignal<InlineEditAnchor>();
 
-  const sameToolHoverAnnotation = createMemo(() => {
+  const hoverAnnotation = createMemo(() => {
     const project = props.project;
     const point = pointerPoint();
     const activeTool = props.activeTool;
@@ -111,7 +111,7 @@ export const ImageEditorCanvas = (props: ImageEditorCanvasProps) => {
     }
 
     return findHitAnnotation(project.annotations, point, (annotation) =>
-      toolMatchesAnnotation(activeTool, annotation),
+      activeTool === "select" ? true : toolMatchesAnnotation(activeTool, annotation),
     );
   });
 
@@ -189,7 +189,7 @@ export const ImageEditorCanvas = (props: ImageEditorCanvasProps) => {
 
     const hoveredId = props.inlineEditingAnnotation
       ? undefined
-      : sameToolHoverAnnotation()?.id;
+      : hoverAnnotation()?.id;
 
     renderImageEditorCanvas(
       canvasRef,
@@ -272,7 +272,7 @@ export const ImageEditorCanvas = (props: ImageEditorCanvasProps) => {
         props.draft,
         props.inlineEditingAnnotation ? undefined : props.selectedId,
         getBaseImageOffset(project),
-        props.inlineEditingAnnotation ? undefined : sameToolHoverAnnotation()?.id,
+        props.inlineEditingAnnotation ? undefined : hoverAnnotation()?.id,
       );
     };
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -618,7 +618,7 @@ export const ImageEditorCanvas = (props: ImageEditorCanvasProps) => {
           isSpacePanning(),
           panDrag() !== undefined,
           hoverResizeHandle(),
-          sameToolHoverAnnotation() !== undefined || hasCropDraftHover(),
+          hoverAnnotation() !== undefined || hasCropDraftHover(),
         ),
         "touch-action": "none",
       };
@@ -637,7 +637,7 @@ export const ImageEditorCanvas = (props: ImageEditorCanvasProps) => {
         isSpacePanning(),
         panDrag() !== undefined,
         hoverResizeHandle(),
-        sameToolHoverAnnotation() !== undefined || hasCropDraftHover(),
+        hoverAnnotation() !== undefined || hasCropDraftHover(),
       ),
       "touch-action": "none",
     };

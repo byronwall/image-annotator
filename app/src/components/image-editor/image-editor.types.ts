@@ -12,6 +12,7 @@ export type ImageEditorTool =
   | "highlighter"
   | "text"
   | "step"
+  | "measure"
   | "pixelate"
   | "crop";
 
@@ -28,6 +29,7 @@ export const toolLabels: Record<ImageEditorTool, string> = {
   highlighter: "Highlight",
   text: "Text",
   step: "Step",
+  measure: "Measure",
   pixelate: "Pixelate",
   crop: "Crop",
 };
@@ -92,6 +94,14 @@ export type StepAnnotation = BaseAnnotation & {
   size: number;
 };
 
+export type MeasureAnnotation = BaseAnnotation & {
+  type: "measure";
+  start: Point;
+  end: Point;
+  color: string;
+  strokeWidth: number;
+};
+
 export type ImageLayerAnnotation = BaseAnnotation & {
   type: "image";
   x: number;
@@ -109,6 +119,7 @@ export type ImageAnnotation =
   | PathAnnotation
   | TextAnnotation
   | StepAnnotation
+  | MeasureAnnotation
   | ImageLayerAnnotation;
 
 export type CropDraft = {
@@ -195,6 +206,8 @@ export const toolMatchesAnnotation = (
       return annotation.type === "text";
     case "step":
       return annotation.type === "step";
+    case "measure":
+      return annotation.type === "measure";
     case "pixelate":
       return annotation.type === "pixelate";
     case "select":
