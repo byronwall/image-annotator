@@ -25,6 +25,12 @@ import {
   renderProjectToPngBlob,
   type Bounds,
 } from "./image-editor.render";
+import {
+  constrainMeasurePointToAxis,
+  inferMeasureAxis,
+  measureAxisFromSnap,
+  measureEndpointSnapFromInfo,
+} from "./image-editor.measure";
 import { ImageEditorCanvas } from "./ImageEditorCanvas";
 import { ImageEditorSidebar, type SavedImageSummary } from "./ImageEditorSidebar";
 import { ImageEditorToolbar } from "./ImageEditorToolbar";
@@ -51,6 +57,11 @@ import {
   type ImageEditorPngPayload,
   type ImageEditorTool,
   type ImageEditorZoom,
+  type MeasureAxis,
+  type MeasureAnnotation,
+  type MeasureEndpointSnap,
+  type MeasureMode,
+  type MeasurePointerInfo,
   type Point,
   type ResizeHandle,
 } from "./image-editor.types";
@@ -78,6 +89,25 @@ type ResizeInteraction = {
   originalAnnotations: ImageAnnotation[];
 };
 
+type MeasureEndpointHandle = "start" | "end";
+
+type MeasureEndpointInteraction = {
+  type: "measure-endpoint";
+  annotationId: string;
+  endpoint: MeasureEndpointHandle;
+  start: Point;
+  anchor: Point;
+  axis: MeasureAxis;
+  originalAnnotations: ImageAnnotation[];
+};
+
+type MeasureAnchorInteraction = {
+  type: "measure-anchor";
+  start: Point;
+  startSnap?: MeasureEndpointSnap;
+  axis?: MeasureAxis;
+};
+
 type CropMoveInteraction = {
   type: "crop-move";
   start: Point;
@@ -95,6 +125,8 @@ type EditorInteraction =
   | DrawingInteraction
   | MoveInteraction
   | ResizeInteraction
+  | MeasureEndpointInteraction
+  | MeasureAnchorInteraction
   | CropMoveInteraction
   | CropResizeInteraction;
 
@@ -114,6 +146,7 @@ export const ImageEditor = () => {
   const [history, setHistory] = createSignal<HistoryEntry[]>([]);
   const [historyIndex, setHistoryIndex] = createSignal(-1);
   const [activeTool, setActiveTool] = createSignal<ImageEditorTool>("select");
+  const [measureMode, setMeasureMode] = createSignal<MeasureMode>("edge");
   const [settings, setSettings] = createSignal<EditorSettings>({
     ...defaultEditorSettings,
   });
@@ -163,6 +196,40 @@ export const ImageEditor = () => {
   });
   const canUndo = createMemo(() => historyIndex() > 0);
   const canRedo = createMemo(() => historyIndex() < history().length - 1);
+  const activeMeasureContext = createMemo(() => {
+    const currentDraft = draft();
+    const currentInteraction = interaction();
+
+    if (currentInteraction?.type === "measure-endpoint") {
+      return {
+        anchor: currentInteraction.anchor,
+        axis: currentInteraction.axis,
+        startSnap: undefined,
+      };
+    }
+
+    if (currentDraft?.type === "measure") {
+      return {
+        anchor: currentDraft.start,
+        axis: currentDraft.axis,
+        startSnap: currentDraft.startSnap,
+      };
+    }
+
+    if (currentInteraction?.type === "measure-anchor") {
+      return {
+        anchor: currentInteraction.start,
+        axis: currentInteraction.axis,
+        startSnap: currentInteraction.startSnap,
+      };
+    }
+
+    return {
+      anchor: undefined,
+      axis: undefined,
+      startSnap: undefined,
+    };
+  });
 
   createEffect(() => {
     const id = selectedId();
@@ -452,7 +519,49 @@ export const ImageEditor = () => {
 
       setActiveTool(tool);
     });
-    setStatus(`${toolLabels[tool]} tool`);
+    setStatus(
+      tool === "measure"
+        ? `Measure tool: ${measureMode() === "edge" ? "edge snap" : "point to point"}.`
+        : `${toolLabels[tool]} tool`,
+    );
+  };
+
+  const handleMeasureModeChange = (mode: MeasureMode) => {
+    if (mode === measureMode()) {
+      return;
+    }
+
+    const selected = selectedAnnotation();
+    const currentProject = project();
+
+    setMeasureMode(mode);
+    batch(() => {
+      setDraft(undefined);
+      if (interaction()?.type === "measure-anchor") {
+        setInteraction(undefined);
+      }
+    });
+
+    if (selected?.type === "measure" && currentProject) {
+      const nextAnnotation = normalizeMeasureMode(selected, mode);
+
+      commitProject(
+        {
+          ...currentProject,
+          annotations: currentProject.annotations.map((annotation) =>
+            annotation.id === selected.id ? nextAnnotation : annotation,
+          ),
+        },
+        "Changed measurement mode",
+      );
+      return;
+    }
+
+    setStatus(
+      mode === "edge"
+        ? "Measure mode: edge snap."
+        : "Measure mode: point to point.",
+    );
   };
 
   const handleFileInput = (event: Event) => {
@@ -462,7 +571,11 @@ export const ImageEditor = () => {
     void importFiles(files, "Imported image");
   };
 
-  const handlePointerDown = (point: Point, event: PointerEvent) => {
+  const handlePointerDown = (
+    point: Point,
+    event: PointerEvent,
+    measureInfo: MeasurePointerInfo | undefined,
+  ) => {
     event.preventDefault();
 
     if (inlineEditingId()) {
@@ -482,6 +595,37 @@ export const ImageEditor = () => {
 
     const tool = activeTool();
     const currentDraft = draft();
+    const currentInteraction = interaction();
+
+    if (tool === "measure" && currentInteraction?.type === "measure-anchor") {
+      const completedDraft = updateAnchoredMeasureDraft(
+        currentDraft,
+        currentInteraction,
+        point,
+        measureInfo,
+        settings(),
+      );
+
+      batch(() => {
+        setInteraction(undefined);
+        setDraft(undefined);
+      });
+
+      if (!isUsableDraft(completedDraft)) {
+        setStatus("Measurement is too short.");
+        return;
+      }
+
+      commitProject(
+        {
+          ...currentProject,
+          annotations: [...currentProject.annotations, completedDraft],
+        },
+        "Added Measure",
+      );
+      setSelectedId(completedDraft.id);
+      return;
+    }
 
     if (tool === "crop" && currentDraft?.type === "crop") {
       const cropBounds = normalizeRect(
@@ -513,6 +657,34 @@ export const ImageEditor = () => {
     }
 
     const selected = selectedAnnotation();
+    const measureEndpointHandle =
+      selected?.type === "measure"
+        ? getMeasureEndpointHandleAt(selected, point)
+        : undefined;
+
+    if (selected?.type === "measure" && measureEndpointHandle) {
+      const anchor =
+        measureEndpointHandle === "start" ? selected.end : selected.start;
+
+      setInteraction({
+        type: "measure-endpoint",
+        annotationId: selected.id,
+        endpoint: measureEndpointHandle,
+        start: point,
+        anchor,
+        axis:
+          selected.axis ??
+          inferMeasureAxis(
+            anchor,
+            measureEndpointHandle === "start" ? selected.start : selected.end,
+            "horizontal",
+          ),
+        originalAnnotations: structuredClone(currentProject.annotations),
+      });
+      setActiveTool("select");
+      return;
+    }
+
     const resizeHandle = selected ? getResizeHandleAt(selected, point) : undefined;
 
     if (selected && resizeHandle) {
@@ -624,7 +796,10 @@ export const ImageEditor = () => {
       return;
     }
 
-    const nextDraft = createDraftAnnotation(tool, point, settings());
+    const nextDraft = createDraftAnnotation(tool, point, settings(), {
+      measureMode: measureMode(),
+      measureInfo,
+    });
 
     if (!nextDraft) {
       return;
@@ -633,11 +808,19 @@ export const ImageEditor = () => {
     batch(() => {
       setSelectedId(undefined);
       setDraft(nextDraft);
-      setInteraction({ type: "draw", tool, start: point });
+      setInteraction({
+        type: "draw",
+        tool,
+        start: nextDraft.type === "measure" ? nextDraft.start : point,
+      });
     });
   };
 
-  const handlePointerMove = (point: Point, event: PointerEvent) => {
+  const handlePointerMove = (
+    point: Point,
+    event: PointerEvent,
+    measureInfo: MeasurePointerInfo | undefined,
+  ) => {
     event.preventDefault();
     const currentInteraction = interaction();
     const currentProject = project();
@@ -691,6 +874,25 @@ export const ImageEditor = () => {
       return;
     }
 
+    if (currentInteraction.type === "measure-endpoint") {
+      const nextProject = {
+        ...currentProject,
+        annotations: currentInteraction.originalAnnotations.map((annotation) =>
+          annotation.id === currentInteraction.annotationId
+            ? resizeMeasureEndpoint(annotation, currentInteraction, point, measureInfo)
+            : annotation,
+        ),
+        updatedAt: Date.now(),
+      };
+      const expanded = expandProjectForInteraction(nextProject, currentInteraction);
+
+      batch(() => {
+        setProject(expanded.project);
+        setInteraction(expanded.interaction);
+      });
+      return;
+    }
+
     if (currentInteraction.type === "crop-move") {
       const deltaX = point.x - currentInteraction.start.x;
       const deltaY = point.y - currentInteraction.start.y;
@@ -723,9 +925,32 @@ export const ImageEditor = () => {
       return;
     }
 
+    if (currentInteraction.type === "measure-anchor") {
+      const nextDraft = updateAnchoredMeasureDraft(
+        currentDraft,
+        currentInteraction,
+        point,
+        measureInfo,
+        settings(),
+      );
+      const expanded = expandProjectForDraft(
+        currentProject,
+        nextDraft,
+        currentInteraction,
+      );
+
+      batch(() => {
+        setProject(expanded.project);
+        setDraft(expanded.draft);
+        setInteraction(expanded.interaction);
+      });
+      return;
+    }
+
     const nextDraft = updateDraft(currentDraft, currentInteraction.start, point, {
       centerFromStart: event.altKey,
       constrain: event.shiftKey,
+      measureInfo,
     });
 
     if (nextDraft.type === "crop") {
@@ -746,7 +971,11 @@ export const ImageEditor = () => {
     });
   };
 
-  const handlePointerUp = (point: Point, event: PointerEvent) => {
+  const handlePointerUp = (
+    point: Point,
+    event: PointerEvent,
+    measureInfo: MeasurePointerInfo | undefined,
+  ) => {
     event.preventDefault();
     const currentInteraction = interaction();
 
@@ -772,8 +1001,43 @@ export const ImageEditor = () => {
       return;
     }
 
+    if (currentInteraction.type === "measure-endpoint") {
+      finishMeasureEndpointInteraction(currentInteraction, point);
+      return;
+    }
+
+    if (currentInteraction.type === "measure-anchor") {
+      return;
+    }
+
     const currentDraft = draft();
     const currentProject = project();
+
+    if (
+      currentInteraction.type === "draw" &&
+      currentInteraction.tool === "measure" &&
+      currentDraft?.type === "measure" &&
+      (currentDraft.mode ?? measureMode()) === "edge" &&
+      distance(currentInteraction.start, point) < 5
+    ) {
+      const anchorDraft = {
+        ...currentDraft,
+        end: currentDraft.start,
+        endSnap: undefined,
+      };
+
+      batch(() => {
+        setDraft(anchorDraft);
+        setInteraction({
+          type: "measure-anchor",
+          start: anchorDraft.start,
+          startSnap: anchorDraft.startSnap,
+          axis: measureInfo?.axis ?? anchorDraft.axis,
+        });
+      });
+      setStatus("First edge locked. Click the opposite edge.");
+      return;
+    }
 
     if (currentDraft?.type === "crop" && currentProject) {
       const cropBounds = clampBoundsToProject(
@@ -885,6 +1149,33 @@ export const ImageEditor = () => {
     }
 
     commitProject(currentProject, "Resized layer", { fitToContent: true });
+  };
+
+  const finishMeasureEndpointInteraction = (
+    currentInteraction: MeasureEndpointInteraction,
+    point: Point,
+  ) => {
+    const currentProject = project();
+    const movedDistance = distance(currentInteraction.start, point);
+
+    batch(() => {
+      setInteraction(undefined);
+      setDraft(undefined);
+    });
+
+    if (!currentProject) {
+      return;
+    }
+
+    if (movedDistance < 1.5) {
+      setProject({
+        ...currentProject,
+        annotations: currentInteraction.originalAnnotations,
+      });
+      return;
+    }
+
+    commitProject(currentProject, "Adjusted measurement", { fitToContent: true });
   };
 
   const finishCropAdjustment = (
@@ -2078,12 +2369,17 @@ export const ImageEditor = () => {
           selectedAnnotation={selectedAnnotation()}
           inlineEditingAnnotation={visibleInlineEditingAnnotation()}
           activeTool={activeTool()}
+          measureMode={measureMode()}
+          measureAnchor={activeMeasureContext().anchor}
+          measureAxis={activeMeasureContext().axis}
+          measureStartSnap={activeMeasureContext().startSnap}
           zoom={zoom()}
           settings={settings()}
           onChooseFile={chooseFile}
           onFiles={(files) => void importFiles(files, "Dropped image")}
           onZoomChange={handleZoomChange}
           onSettingsChange={handleSettingsChange}
+          onMeasureModeChange={handleMeasureModeChange}
           onStartInlineEdit={startInlineEdit}
           onInlineEditChange={(id, value) =>
             updateAnnotationLive(id, (annotation) =>
@@ -2184,13 +2480,16 @@ const createDraftAnnotation = (
   tool: ImageEditorTool,
   point: Point,
   settings: EditorSettings,
+  options: {
+    measureMode: MeasureMode;
+    measureInfo?: MeasurePointerInfo;
+  } = { measureMode: "edge" },
 ): EditorDraft | undefined => {
   const id = createEditorId("layer");
   const createdAt = Date.now();
 
   switch (tool) {
     case "arrow":
-    case "measure":
       return {
         id,
         type: tool,
@@ -2201,6 +2500,23 @@ const createDraftAnnotation = (
         color: settings.color,
         strokeWidth: settings.strokeWidth,
       };
+    case "measure": {
+      const start = options.measureInfo?.point ?? point;
+
+      return {
+        id,
+        type: "measure",
+        createdAt,
+        opacity: settings.opacity,
+        start,
+        end: start,
+        color: settings.color,
+        strokeWidth: settings.strokeWidth,
+        mode: options.measureMode,
+        axis: options.measureMode === "point" ? "point" : options.measureInfo?.axis,
+        startSnap: measureEndpointSnapFromInfo(options.measureInfo),
+      };
+    }
     case "rectangle":
     case "ellipse":
     case "pixelate":
@@ -2248,15 +2564,20 @@ const updateDraft = (
   draft: EditorDraft,
   start: Point,
   point: Point,
-  options: { centerFromStart: boolean; constrain: boolean },
+  options: {
+    centerFromStart: boolean;
+    constrain: boolean;
+    measureInfo?: MeasurePointerInfo;
+  },
 ): EditorDraft => {
   switch (draft.type) {
     case "arrow":
-    case "measure":
       return {
         ...draft,
         end: options.constrain ? constrainPointTo45Degrees(start, point) : point,
       };
+    case "measure":
+      return updateMeasureDraft(draft, point, options.measureInfo, options.constrain);
     case "rectangle":
     case "ellipse":
     case "pixelate":
@@ -2286,6 +2607,88 @@ const updateDraft = (
     case "image":
       return draft;
   }
+};
+
+const updateMeasureDraft = (
+  draft: MeasureAnnotation,
+  point: Point,
+  measureInfo: MeasurePointerInfo | undefined,
+  constrain: boolean,
+): MeasureAnnotation => {
+  const mode = draft.mode ?? "point";
+
+  if (mode === "point") {
+    return {
+      ...draft,
+      axis: "point",
+      end: constrain ? constrainPointTo45Degrees(draft.start, point) : point,
+      endSnap: undefined,
+    };
+  }
+
+  const fallbackAxis =
+    draft.axis ?? measureInfo?.axis ?? measureAxisFromSnap(draft.startSnap) ?? "horizontal";
+  const axis = measureInfo?.axis ?? inferMeasureAxis(draft.start, point, fallbackAxis);
+  const end =
+    measureInfo?.point ?? constrainMeasurePointToAxis(draft.start, point, axis);
+
+  return {
+    ...draft,
+    axis,
+    end,
+    endSnap: measureEndpointSnapFromInfo(measureInfo),
+  };
+};
+
+const normalizeMeasureMode = (
+  annotation: MeasureAnnotation,
+  mode: MeasureMode,
+): MeasureAnnotation => {
+  if (mode === "point") {
+    return {
+      ...annotation,
+      mode,
+      axis: "point",
+      startSnap: undefined,
+      endSnap: undefined,
+    };
+  }
+
+  return {
+    ...annotation,
+    mode,
+    axis:
+      annotation.axis && annotation.axis !== "point"
+        ? annotation.axis
+        : inferMeasureAxis(annotation.start, annotation.end, "horizontal"),
+  };
+};
+
+const updateAnchoredMeasureDraft = (
+  currentDraft: EditorDraft | undefined,
+  interaction: MeasureAnchorInteraction,
+  point: Point,
+  measureInfo: MeasurePointerInfo | undefined,
+  settings: EditorSettings,
+): MeasureAnnotation => {
+  const draft =
+    currentDraft?.type === "measure"
+      ? currentDraft
+      : ({
+          id: createEditorId("layer"),
+          type: "measure",
+          createdAt: Date.now(),
+          opacity: settings.opacity,
+          start: interaction.start,
+          end: interaction.start,
+          color: settings.color,
+          strokeWidth: settings.strokeWidth,
+          mode: "edge",
+          axis: interaction.axis,
+          startSnap: interaction.startSnap,
+        } satisfies MeasureAnnotation);
+
+  return updateMeasureDraft(draft, point, measureInfo, false);
 };
 
 const createTextAnnotation = (
@@ -2329,8 +2732,9 @@ const createStepAnnotation = (
 const isUsableDraft = (draft: EditorDraft) => {
   switch (draft.type) {
     case "arrow":
-    case "measure":
       return distance(draft.start, draft.end) >= 8;
+    case "measure":
+      return getMeasureLength(draft) >= 8;
     case "rectangle":
     case "ellipse":
     case "pixelate":
@@ -2362,6 +2766,63 @@ const findHitAnnotation = (
   }
 
   return undefined;
+};
+
+const getMeasureEndpointHandleAt = (
+  annotation: MeasureAnnotation,
+  point: Point,
+): MeasureEndpointHandle | undefined => {
+  const handleRadius = Math.max(8, annotation.strokeWidth * 2.5);
+
+  if (distance(annotation.start, point) <= handleRadius) {
+    return "start";
+  }
+
+  if (distance(annotation.end, point) <= handleRadius) {
+    return "end";
+  }
+
+  return undefined;
+};
+
+const resizeMeasureEndpoint = (
+  annotation: ImageAnnotation,
+  interaction: MeasureEndpointInteraction,
+  point: Point,
+  measureInfo: MeasurePointerInfo | undefined,
+): ImageAnnotation => {
+  if (annotation.type !== "measure") {
+    return annotation;
+  }
+
+  const mode = annotation.mode ?? "point";
+
+  if (mode === "point" || interaction.axis === "point") {
+    return {
+      ...annotation,
+      axis: "point",
+      start: interaction.endpoint === "start" ? point : annotation.start,
+      end: interaction.endpoint === "end" ? point : annotation.end,
+      startSnap:
+        interaction.endpoint === "start" ? undefined : annotation.startSnap,
+      endSnap: interaction.endpoint === "end" ? undefined : annotation.endSnap,
+    };
+  }
+
+  const nextPoint =
+    measureInfo?.point ??
+    constrainMeasurePointToAxis(interaction.anchor, point, interaction.axis);
+  const nextSnap = measureEndpointSnapFromInfo(measureInfo);
+
+  return {
+    ...annotation,
+    axis: interaction.axis,
+    start: interaction.endpoint === "start" ? nextPoint : annotation.start,
+    end: interaction.endpoint === "end" ? nextPoint : annotation.end,
+    startSnap:
+      interaction.endpoint === "start" ? nextSnap : annotation.startSnap,
+    endSnap: interaction.endpoint === "end" ? nextSnap : annotation.endSnap,
+  };
 };
 
 const getClipboardImageFiles = (clipboardData: DataTransfer): File[] => {
@@ -2475,8 +2936,11 @@ const padProjectCanvas = (
 
 const expandProjectForInteraction = (
   project: ImageEditorProject,
-  interaction: MoveInteraction | ResizeInteraction,
-): { project: ImageEditorProject; interaction: MoveInteraction | ResizeInteraction } => {
+  interaction: MoveInteraction | ResizeInteraction | MeasureEndpointInteraction,
+): {
+  project: ImageEditorProject;
+  interaction: MoveInteraction | ResizeInteraction | MeasureEndpointInteraction;
+} => {
   const expansion = expandProjectToContent(project);
 
   return {
@@ -2488,11 +2952,11 @@ const expandProjectForInteraction = (
 const expandProjectForDraft = (
   project: ImageEditorProject,
   draft: ImageAnnotation,
-  interaction: DrawingInteraction,
+  interaction: DrawingInteraction | MeasureAnchorInteraction,
 ): {
   project: ImageEditorProject;
   draft: ImageAnnotation;
-  interaction: DrawingInteraction;
+  interaction: DrawingInteraction | MeasureAnchorInteraction;
 } => {
   const expansion = expandProjectToContent(project, [draft]);
 
@@ -2571,6 +3035,7 @@ const shiftInteraction = <T extends EditorInteraction>(
 
   switch (interaction.type) {
     case "draw":
+    case "measure-anchor":
       return {
         ...interaction,
         start: movePoint(interaction.start, shift.x, shift.y),
@@ -2588,6 +3053,15 @@ const shiftInteraction = <T extends EditorInteraction>(
         ...interaction,
         start: movePoint(interaction.start, shift.x, shift.y),
         initialBounds: moveBounds(interaction.initialBounds, shift.x, shift.y),
+        originalAnnotations: interaction.originalAnnotations.map((annotation) =>
+          moveAnnotation(annotation, shift.x, shift.y),
+        ),
+      } as T;
+    case "measure-endpoint":
+      return {
+        ...interaction,
+        start: movePoint(interaction.start, shift.x, shift.y),
+        anchor: movePoint(interaction.anchor, shift.x, shift.y),
         originalAnnotations: interaction.originalAnnotations.map((annotation) =>
           moveAnnotation(annotation, shift.x, shift.y),
         ),
@@ -2808,6 +3282,18 @@ const isPointInBounds = (point: Point, bounds: Bounds) =>
 
 const distance = (first: Point, second: Point) =>
   Math.hypot(first.x - second.x, first.y - second.y);
+
+const getMeasureLength = (annotation: MeasureAnnotation) => {
+  switch (annotation.axis) {
+    case "horizontal":
+      return Math.abs(annotation.end.x - annotation.start.x);
+    case "vertical":
+      return Math.abs(annotation.end.y - annotation.start.y);
+    case "point":
+    case undefined:
+      return distance(annotation.start, annotation.end);
+  }
+};
 
 const intersects = (first: Bounds, second: Bounds) =>
   first.x < second.x + second.width &&

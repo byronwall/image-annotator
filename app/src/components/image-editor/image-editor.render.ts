@@ -7,6 +7,7 @@ import {
   type ImageLayerAnnotation,
   type ImageEditorProject,
   type MeasureAnnotation,
+  type MeasurePointerInfo,
   type PathAnnotation,
   type Point,
   type ResizeHandle,
@@ -74,7 +75,7 @@ export const renderImageEditorCanvas = (
   selectedId: string | undefined,
   baseImageOffset: Point = { x: 0, y: 0 },
   hoveredId: string | undefined = undefined,
-  options: { backgroundColor?: string } = {},
+  options: { backgroundColor?: string; measureGuide?: MeasurePointerInfo } = {},
 ) => {
   const context = canvas.getContext("2d");
 
@@ -115,6 +116,10 @@ export const renderImageEditorCanvas = (
     }
   }
 
+  if (options.measureGuide) {
+    drawMeasureGuide(context, options.measureGuide);
+  }
+
   if (hoveredId && hoveredId !== selectedId) {
     const hovered = annotations.find((annotation) => annotation.id === hoveredId);
     if (hovered && !hovered.hidden) {
@@ -125,7 +130,11 @@ export const renderImageEditorCanvas = (
   if (selectedId) {
     const selected = annotations.find((annotation) => annotation.id === selectedId);
     if (selected && !selected.hidden) {
-      drawSelection(context, getAnnotationBounds(selected), canResizeAnnotation(selected));
+      if (selected.type === "measure") {
+        drawMeasureSelection(context, selected);
+      } else {
+        drawSelection(context, getAnnotationBounds(selected), canResizeAnnotation(selected));
+      }
     }
   }
 };
@@ -647,16 +656,14 @@ const drawMeasure = (
   context: CanvasRenderingContext2D,
   annotation: MeasureAnnotation,
 ) => {
-  const length = Math.hypot(
-    annotation.end.x - annotation.start.x,
-    annotation.end.y - annotation.start.y,
-  );
+  const length = getMeasureLength(annotation);
 
   if (length < 1) {
     return;
   }
 
-  const colorStops = detectColorStops(context, annotation, length);
+  const mode = annotation.mode ?? "point";
+  const colorStops = mode === "edge" ? [] : detectColorStops(context, annotation, length);
   const angle = Math.atan2(
     annotation.end.y - annotation.start.y,
     annotation.end.x - annotation.start.x,
@@ -684,8 +691,13 @@ const drawMeasure = (
   context.lineTo(annotation.end.x, annotation.end.y);
   context.stroke();
 
-  drawMeasureTick(context, annotation.start, normal, tickSize);
-  drawMeasureTick(context, annotation.end, normal, tickSize);
+  if (mode === "edge") {
+    drawMeasureCaliperEnd(context, annotation.start, normal, angle, tickSize, 1);
+    drawMeasureCaliperEnd(context, annotation.end, normal, angle, tickSize, -1);
+  } else {
+    drawMeasureTick(context, annotation.start, normal, tickSize);
+    drawMeasureTick(context, annotation.end, normal, tickSize);
+  }
 
   context.strokeStyle = "rgba(245, 158, 11, 0.95)";
   context.fillStyle = "rgba(245, 158, 11, 0.95)";
@@ -719,6 +731,95 @@ const drawMeasure = (
   context.stroke();
   context.fillStyle = annotation.color;
   context.fillText(label, labelX, labelY + 0.5);
+  context.restore();
+};
+
+const getMeasureLength = (annotation: MeasureAnnotation) => {
+  switch (annotation.axis) {
+    case "horizontal":
+      return Math.abs(annotation.end.x - annotation.start.x);
+    case "vertical":
+      return Math.abs(annotation.end.y - annotation.start.y);
+    case "point":
+    case undefined:
+      return Math.hypot(
+        annotation.end.x - annotation.start.x,
+        annotation.end.y - annotation.start.y,
+      );
+  }
+};
+
+const drawMeasureCaliperEnd = (
+  context: CanvasRenderingContext2D,
+  point: Point,
+  normal: Point,
+  angle: number,
+  size: number,
+  direction: 1 | -1,
+) => {
+  const tangent = {
+    x: Math.cos(angle) * direction,
+    y: Math.sin(angle) * direction,
+  };
+  const hookSize = Math.max(5, size * 0.3);
+
+  drawMeasureTick(context, point, normal, size);
+  context.beginPath();
+  context.moveTo(point.x - normal.x * size * 0.5, point.y - normal.y * size * 0.5);
+  context.lineTo(
+    point.x - normal.x * size * 0.5 + tangent.x * hookSize,
+    point.y - normal.y * size * 0.5 + tangent.y * hookSize,
+  );
+  context.moveTo(point.x + normal.x * size * 0.5, point.y + normal.y * size * 0.5);
+  context.lineTo(
+    point.x + normal.x * size * 0.5 + tangent.x * hookSize,
+    point.y + normal.y * size * 0.5 + tangent.y * hookSize,
+  );
+  context.stroke();
+};
+
+const drawMeasureGuide = (
+  context: CanvasRenderingContext2D,
+  guide: MeasurePointerInfo,
+) => {
+  if (guide.mode !== "edge" || guide.candidates.length === 0) {
+    return;
+  }
+
+  context.save();
+  context.lineCap = "round";
+  context.lineWidth = 2;
+
+  for (const candidate of guide.candidates) {
+    const isActive =
+      guide.snapped?.edge === candidate.edge &&
+      guide.snapped.point.x === candidate.point.x &&
+      guide.snapped.point.y === candidate.point.y;
+    const length = isActive ? 96 : 56;
+    const half = length / 2;
+
+    context.strokeStyle = isActive
+      ? "rgba(14, 165, 233, 0.95)"
+      : "rgba(245, 158, 11, 0.78)";
+    context.fillStyle = context.strokeStyle;
+    context.setLineDash(isActive ? [] : [5, 5]);
+    context.beginPath();
+
+    if (candidate.edge === "vertical-edge") {
+      context.moveTo(candidate.point.x, candidate.point.y - half);
+      context.lineTo(candidate.point.x, candidate.point.y + half);
+    } else {
+      context.moveTo(candidate.point.x - half, candidate.point.y);
+      context.lineTo(candidate.point.x + half, candidate.point.y);
+    }
+
+    context.stroke();
+    context.setLineDash([]);
+    context.beginPath();
+    context.arc(candidate.point.x, candidate.point.y, isActive ? 4.5 : 3.2, 0, Math.PI * 2);
+    context.fill();
+  }
+
   context.restore();
 };
 
@@ -861,6 +962,36 @@ const drawSelection = (
       context.fill();
       context.stroke();
     }
+  }
+
+  context.restore();
+};
+
+const drawMeasureSelection = (
+  context: CanvasRenderingContext2D,
+  annotation: MeasureAnnotation,
+) => {
+  context.save();
+  context.strokeStyle = selectionColor;
+  context.fillStyle = "#ffffff";
+  context.lineWidth = 2;
+  context.setLineDash([6, 4]);
+  context.beginPath();
+  context.moveTo(annotation.start.x, annotation.start.y);
+  context.lineTo(annotation.end.x, annotation.end.y);
+  context.stroke();
+  context.setLineDash([]);
+
+  for (const point of [annotation.start, annotation.end]) {
+    context.beginPath();
+    context.rect(
+      point.x - resizeHandleSize / 2,
+      point.y - resizeHandleSize / 2,
+      resizeHandleSize,
+      resizeHandleSize,
+    );
+    context.fill();
+    context.stroke();
   }
 
   context.restore();

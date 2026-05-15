@@ -20,6 +20,35 @@ export type ImageEditorZoom = "fit" | number;
 
 export type ResizeHandle = "n" | "ne" | "e" | "se" | "s" | "sw" | "w" | "nw";
 
+export type MeasureMode = "edge" | "point";
+
+export type MeasureAxis = "horizontal" | "vertical" | "point";
+
+export type MeasureEdge = "vertical-edge" | "horizontal-edge";
+
+export type MeasureEndpointSnap = {
+  edge: MeasureEdge;
+  confidence: number;
+};
+
+export type MeasureEdgeCandidate = MeasureEndpointSnap & {
+  point: Point;
+  distance: number;
+};
+
+export type MeasureSnap = MeasureEndpointSnap & {
+  point: Point;
+};
+
+export type MeasurePointerInfo = {
+  mode: MeasureMode;
+  rawPoint: Point;
+  point: Point;
+  axis?: MeasureAxis;
+  snapped?: MeasureSnap;
+  candidates: MeasureEdgeCandidate[];
+};
+
 export const toolLabels: Record<ImageEditorTool, string> = {
   select: "Select",
   arrow: "Arrow",
@@ -100,6 +129,10 @@ export type MeasureAnnotation = BaseAnnotation & {
   end: Point;
   color: string;
   strokeWidth: number;
+  mode?: MeasureMode;
+  axis?: MeasureAxis;
+  startSnap?: MeasureEndpointSnap;
+  endSnap?: MeasureEndpointSnap;
 };
 
 export type ImageLayerAnnotation = BaseAnnotation & {

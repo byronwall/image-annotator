@@ -16,6 +16,7 @@ import {
   type EditorSettings,
   type ImageAnnotation,
   type ImageEditorTool,
+  type MeasureMode,
   toolLabels,
 } from "./image-editor.types";
 
@@ -44,8 +45,10 @@ export type ImageEditorContextBarProps = {
   style: JSX.CSSProperties;
   activeTool: ImageEditorTool;
   selectedAnnotation: ImageAnnotation | undefined;
+  measureMode: MeasureMode;
   settings: EditorSettings;
   onSettingsChange: (settings: Partial<EditorSettings>) => void;
+  onMeasureModeChange: (mode: MeasureMode) => void;
   onStartInlineEdit: () => void;
   onDuplicateSelected: () => void;
   onBringForward: () => void;
@@ -73,6 +76,8 @@ export const ImageEditorContextBar = (props: ImageEditorContextBarProps) => {
     props.activeTool === "step" ||
     props.selectedAnnotation?.type === "text" ||
     props.selectedAnnotation?.type === "step";
+  const usesMeasureMode = () =>
+    props.activeTool === "measure" || props.selectedAnnotation?.type === "measure";
 
   return (
     <HStack
@@ -153,6 +158,41 @@ export const ImageEditorContextBar = (props: ImageEditorContextBarProps) => {
           </HStack>
         </Show>
       </HStack>
+
+      <Show when={usesMeasureMode()}>
+        <HStack
+          role="radiogroup"
+          aria-label="Measurement mode"
+          gap="0"
+          p="0.5"
+          borderRadius="l2"
+          borderWidth="1px"
+          borderColor="border"
+          bg="bg.subtle"
+          flexShrink="0"
+        >
+          <Button
+            role="radio"
+            aria-checked={props.measureMode === "edge"}
+            size="2xs"
+            variant={props.measureMode === "edge" ? "solid" : "plain"}
+            colorPalette={props.measureMode === "edge" ? "blue" : "gray"}
+            onClick={() => props.onMeasureModeChange("edge")}
+          >
+            Edge
+          </Button>
+          <Button
+            role="radio"
+            aria-checked={props.measureMode === "point"}
+            size="2xs"
+            variant={props.measureMode === "point" ? "solid" : "plain"}
+            colorPalette={props.measureMode === "point" ? "blue" : "gray"}
+            onClick={() => props.onMeasureModeChange("point")}
+          >
+            Point
+          </Button>
+        </HStack>
+      </Show>
 
       <HStack gap="2" flexWrap="nowrap" flexShrink="0">
         <For each={strokeSwatches}>

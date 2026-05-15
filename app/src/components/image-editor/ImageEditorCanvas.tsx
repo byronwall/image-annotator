@@ -19,6 +19,7 @@ import {
   renderImageEditorCanvas,
   type Bounds,
 } from "./image-editor.render";
+import { createMeasurePointerInfo } from "./image-editor.measure";
 import {
   toolMatchesAnnotation,
   type EditorSettings,
@@ -27,6 +28,10 @@ import {
   type ImageEditorProject,
   type ImageEditorTool,
   type ImageEditorZoom,
+  type MeasureAxis,
+  type MeasureEndpointSnap,
+  type MeasureMode,
+  type MeasurePointerInfo,
   type Point,
   type ResizeHandle,
 } from "./image-editor.types";
@@ -44,12 +49,17 @@ export type ImageEditorCanvasProps = {
   selectedAnnotation: ImageAnnotation | undefined;
   inlineEditingAnnotation: EditableAnnotation | undefined;
   activeTool: ImageEditorTool;
+  measureMode: MeasureMode;
+  measureAnchor: Point | undefined;
+  measureAxis: MeasureAxis | undefined;
+  measureStartSnap: MeasureEndpointSnap | undefined;
   zoom: ImageEditorZoom;
   settings: EditorSettings;
   onChooseFile: () => void;
   onFiles: (files: File[]) => void;
   onZoomChange: (zoom: ImageEditorZoom) => void;
   onSettingsChange: (settings: Partial<EditorSettings>) => void;
+  onMeasureModeChange: (mode: MeasureMode) => void;
   onStartInlineEdit: () => void;
   onInlineEditChange: (id: string, value: string) => void;
   onInlineEditCommit: () => void;
@@ -60,9 +70,21 @@ export type ImageEditorCanvasProps = {
   onDeleteSelected: () => void;
   onApplyCrop: () => void;
   onCancelCrop: () => void;
-  onPointerDown: (point: Point, event: PointerEvent) => void;
-  onPointerMove: (point: Point, event: PointerEvent) => void;
-  onPointerUp: (point: Point, event: PointerEvent) => void;
+  onPointerDown: (
+    point: Point,
+    event: PointerEvent,
+    measureInfo: MeasurePointerInfo | undefined,
+  ) => void;
+  onPointerMove: (
+    point: Point,
+    event: PointerEvent,
+    measureInfo: MeasurePointerInfo | undefined,
+  ) => void;
+  onPointerUp: (
+    point: Point,
+    event: PointerEvent,
+    measureInfo: MeasurePointerInfo | undefined,
+  ) => void;
   onDoubleClick: (point: Point, event: MouseEvent & { currentTarget: HTMLCanvasElement }) => void;
 };
 
@@ -92,6 +114,9 @@ export const ImageEditorCanvas = (props: ImageEditorCanvasProps) => {
   let hostRef: HTMLDivElement | undefined;
   let scrollRef: HTMLDivElement | undefined;
   let canvasRef: HTMLCanvasElement | undefined;
+  let measureEdgeCanvas: HTMLCanvasElement | undefined;
+  let measureEdgeContext: CanvasRenderingContext2D | undefined;
+  let measureEdgeSourceKey: string | undefined;
   let lastSelectionScrollKey: string | undefined;
   const [baseImage, setBaseImage] = createSignal<HTMLImageElement>();
   const [canvasFrame, setCanvasFrame] = createSignal<CanvasFrame>();
@@ -145,6 +170,92 @@ export const ImageEditorCanvas = (props: ImageEditorCanvasProps) => {
     );
   });
 
+  const effectiveMeasureMode = () =>
+    props.draft?.type === "measure"
+      ? props.draft.mode ?? props.measureMode
+      : props.selectedAnnotation?.type === "measure"
+        ? props.selectedAnnotation.mode ?? props.measureMode
+        : props.measureMode;
+
+  const measurePointerInfoFor = (
+    point: Point,
+    event?: Pick<PointerEvent, "altKey">,
+  ): MeasurePointerInfo | undefined => {
+    const mode = effectiveMeasureMode();
+
+    if (
+      props.activeTool !== "measure" &&
+      props.draft?.type !== "measure" &&
+      props.selectedAnnotation?.type !== "measure"
+    ) {
+      return undefined;
+    }
+
+    return createMeasurePointerInfo(measureEdgeContext, point, {
+      mode,
+      start: props.measureAnchor,
+      axis: props.measureAxis,
+      startSnap: props.measureStartSnap,
+      disableSnap: event?.altKey,
+    });
+  };
+
+  const measureGuide = createMemo(() => {
+    const point = pointerPoint();
+
+    if (!point) {
+      return undefined;
+    }
+
+    return measurePointerInfoFor(point);
+  });
+
+  const refreshMeasureEdgeSource = (
+    currentProject: ImageEditorProject,
+    image: HTMLImageElement,
+  ) => {
+    const edgeAnnotations = canvasAnnotations().filter(
+      (annotation) => annotation.type !== "measure",
+    );
+    const nextKey = [
+      currentProject.id,
+      currentProject.updatedAt,
+      currentProject.width,
+      currentProject.height,
+      currentProject.baseImage.dataUrl,
+      props.inlineEditingAnnotation?.id ?? "",
+      edgeAnnotations.length,
+    ].join(":");
+
+    if (measureEdgeSourceKey === nextKey && measureEdgeContext) {
+      return;
+    }
+
+    if (!measureEdgeCanvas) {
+      measureEdgeCanvas = document.createElement("canvas");
+    }
+
+    if (measureEdgeCanvas.width !== currentProject.width) {
+      measureEdgeCanvas.width = currentProject.width;
+    }
+
+    if (measureEdgeCanvas.height !== currentProject.height) {
+      measureEdgeCanvas.height = currentProject.height;
+    }
+
+    renderImageEditorCanvas(
+      measureEdgeCanvas,
+      image,
+      edgeAnnotations,
+      undefined,
+      undefined,
+      getBaseImageOffset(currentProject),
+      undefined,
+    );
+    measureEdgeContext = measureEdgeCanvas.getContext("2d") ?? undefined;
+    measureEdgeSourceKey = nextKey;
+  };
+
   createEffect(() => {
     const dataUrl = props.project?.baseImage.dataUrl;
 
@@ -191,6 +302,7 @@ export const ImageEditorCanvas = (props: ImageEditorCanvasProps) => {
       ? undefined
       : hoverAnnotation()?.id;
 
+    refreshMeasureEdgeSource(project, image);
     renderImageEditorCanvas(
       canvasRef,
       image,
@@ -199,6 +311,7 @@ export const ImageEditorCanvas = (props: ImageEditorCanvasProps) => {
       props.inlineEditingAnnotation ? undefined : props.selectedId,
       getBaseImageOffset(project),
       hoveredId,
+      { measureGuide: measureGuide() },
     );
     window.requestAnimationFrame(updateCanvasFrame);
   });
@@ -265,6 +378,8 @@ export const ImageEditorCanvas = (props: ImageEditorCanvasProps) => {
         return;
       }
 
+      measureEdgeSourceKey = undefined;
+      refreshMeasureEdgeSource(project, image);
       renderImageEditorCanvas(
         canvasRef,
         image,
@@ -273,6 +388,7 @@ export const ImageEditorCanvas = (props: ImageEditorCanvasProps) => {
         props.inlineEditingAnnotation ? undefined : props.selectedId,
         getBaseImageOffset(project),
         props.inlineEditingAnnotation ? undefined : hoverAnnotation()?.id,
+        { measureGuide: measureGuide() },
       );
     };
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -461,7 +577,7 @@ export const ImageEditorCanvas = (props: ImageEditorCanvasProps) => {
     event.preventDefault();
     event.stopPropagation();
     setPointerPoint(point);
-    props.onPointerDown(point, event);
+    props.onPointerDown(point, event, undefined);
   };
 
   const updateCanvasFrame = () => {
@@ -655,11 +771,16 @@ export const ImageEditorCanvas = (props: ImageEditorCanvasProps) => {
       return `${Math.round(bounds.width)} x ${Math.round(bounds.height)}`;
     }
 
-    if (currentDraft.type === "arrow") {
-      const length = Math.hypot(
-        currentDraft.end.x - currentDraft.start.x,
-        currentDraft.end.y - currentDraft.start.y,
-      );
+    if (currentDraft.type === "arrow" || currentDraft.type === "measure") {
+      const length =
+        currentDraft.type === "measure" && currentDraft.axis === "horizontal"
+          ? Math.abs(currentDraft.end.x - currentDraft.start.x)
+          : currentDraft.type === "measure" && currentDraft.axis === "vertical"
+            ? Math.abs(currentDraft.end.y - currentDraft.start.y)
+            : Math.hypot(
+                currentDraft.end.x - currentDraft.start.x,
+                currentDraft.end.y - currentDraft.start.y,
+              );
       return `${Math.round(length)} px`;
     }
 
@@ -779,12 +900,12 @@ export const ImageEditorCanvas = (props: ImageEditorCanvasProps) => {
                   event.currentTarget.setPointerCapture(event.pointerId);
                   const point = pointFromEvent(event);
                   setPointerPoint(point);
-                  props.onPointerDown(point, event);
+                  props.onPointerDown(point, event, measurePointerInfoFor(point, event));
                 }}
                 onPointerMove={(event) => {
                   const point = pointFromEvent(event);
                   setPointerPoint(point);
-                  props.onPointerMove(point, event);
+                  props.onPointerMove(point, event, measurePointerInfoFor(point, event));
                 }}
                 onPointerUp={(event) => {
                   if (event.currentTarget.hasPointerCapture(event.pointerId)) {
@@ -793,7 +914,7 @@ export const ImageEditorCanvas = (props: ImageEditorCanvasProps) => {
 
                   const point = pointFromEvent(event);
                   setPointerPoint(point);
-                  props.onPointerUp(point, event);
+                  props.onPointerUp(point, event, measurePointerInfoFor(point, event));
                 }}
                 onPointerLeave={() => setPointerPoint(undefined)}
                 onDblClick={(event) => props.onDoubleClick(pointFromEvent(event), event)}
@@ -831,8 +952,10 @@ export const ImageEditorCanvas = (props: ImageEditorCanvasProps) => {
                 style={contextBarStyle()}
                 activeTool={props.activeTool}
                 selectedAnnotation={props.selectedAnnotation}
+                measureMode={props.measureMode}
                 settings={props.settings}
                 onSettingsChange={props.onSettingsChange}
+                onMeasureModeChange={props.onMeasureModeChange}
                 onStartInlineEdit={props.onStartInlineEdit}
                 onDuplicateSelected={props.onDuplicateSelected}
                 onBringForward={props.onBringForward}
