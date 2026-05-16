@@ -10,6 +10,7 @@ import {
   type MeasurePointerInfo,
   type PathAnnotation,
   type Point,
+  type RectangleStyle,
   type ResizeHandle,
   type StepAnnotation,
   type TextAnnotation,
@@ -22,7 +23,16 @@ export type Bounds = {
   height: number;
 };
 
+export type SnapGuide = {
+  axis: "x" | "y";
+  position: number;
+  min: number;
+  max: number;
+};
+
 const selectionColor = "#0ea5e9";
+const groupSelectionColor = "#2563eb";
+const snapGuideColor = "rgba(245, 158, 11, 0.95)";
 const resizeHandleSize = 12;
 const imageLayerCache = new Map<string, HTMLImageElement>();
 const textAnnotationFontFamily =
@@ -72,10 +82,16 @@ export const renderImageEditorCanvas = (
   baseImage: HTMLImageElement,
   annotations: ImageAnnotation[],
   draft: EditorDraft | undefined,
-  selectedId: string | undefined,
+  selectedIds: string[] = [],
   baseImageOffset: Point = { x: 0, y: 0 },
   hoveredId: string | undefined = undefined,
-  options: { backgroundColor?: string; measureGuide?: MeasurePointerInfo } = {},
+  options: {
+    backgroundColor?: string;
+    measureDeviceScale?: number;
+    measureGuide?: MeasurePointerInfo;
+    snapGuides?: SnapGuide[];
+    selectionMarquee?: Bounds;
+  } = {},
 ) => {
   const context = canvas.getContext("2d");
 
@@ -105,14 +121,14 @@ export const renderImageEditorCanvas = (
       continue;
     }
 
-    drawAnnotation(context, annotation);
+    drawAnnotation(context, annotation, options);
   }
 
   if (draft) {
     if (draft.type === "crop") {
       drawCropDraft(context, draft);
     } else {
-      drawAnnotation(context, draft);
+      drawAnnotation(context, draft, options);
     }
   }
 
@@ -120,21 +136,42 @@ export const renderImageEditorCanvas = (
     drawMeasureGuide(context, options.measureGuide);
   }
 
-  if (hoveredId && hoveredId !== selectedId) {
+  if (options.snapGuides && options.snapGuides.length > 0) {
+    drawSnapGuides(context, options.snapGuides);
+  }
+
+  if (options.selectionMarquee) {
+    drawSelectionMarquee(context, options.selectionMarquee);
+  }
+
+  if (hoveredId && !selectedIds.includes(hoveredId)) {
     const hovered = annotations.find((annotation) => annotation.id === hoveredId);
     if (hovered && !hovered.hidden) {
       drawHover(context, getAnnotationBounds(hovered));
     }
   }
 
-  if (selectedId) {
-    const selected = annotations.find((annotation) => annotation.id === selectedId);
-    if (selected && !selected.hidden) {
-      if (selected.type === "measure") {
-        drawMeasureSelection(context, selected);
-      } else {
-        drawSelection(context, getAnnotationBounds(selected), canResizeAnnotation(selected));
-      }
+  const selectedAnnotations = selectedIds
+    .map((id) => annotations.find((annotation) => annotation.id === id))
+    .filter((annotation): annotation is ImageAnnotation => annotation !== undefined && !annotation.hidden);
+
+  if (selectedAnnotations.length === 1) {
+    const selected = selectedAnnotations[0];
+
+    if (selected?.type === "measure") {
+      drawMeasureSelection(context, selected);
+    } else if (selected) {
+      drawSelection(context, getAnnotationBounds(selected), canResizeAnnotation(selected));
+    }
+  } else if (selectedAnnotations.length > 1) {
+    for (const annotation of selectedAnnotations) {
+      drawSelection(context, getAnnotationBounds(annotation), false, "rgba(14, 165, 233, 0.56)");
+    }
+
+    const bounds = getAnnotationUnionBounds(selectedAnnotations);
+
+    if (bounds) {
+      drawSelection(context, bounds, true, groupSelectionColor);
     }
   }
 };
@@ -152,7 +189,7 @@ export const renderProjectToPngBlob = async (
     image,
     project.annotations,
     undefined,
-    undefined,
+    [],
     getBaseImageOffset(project),
     undefined,
     options,
@@ -178,15 +215,79 @@ export const getBaseImageOffset = (
 });
 
 export const getTextRenderMetrics = (
-  annotation: Pick<TextAnnotation, "fontSize">,
-) => ({
-  paddingX: Math.max(8, annotation.fontSize * 0.32),
-  paddingY: Math.max(5, annotation.fontSize * 0.22),
-  lineHeight: annotation.fontSize * 1.28,
-  fontFamily: textAnnotationFontFamily,
-  fontWeight: textAnnotationFontWeight,
-  borderRadius: 8,
-});
+  annotation: Pick<TextAnnotation, "fontSize"> & Partial<Pick<TextAnnotation, "textStyle">>,
+) => {
+  const style = annotation.textStyle ?? "pill";
+  const hasBackground = style !== "none";
+  const isCode = style === "code-label";
+  const isNumbered = style === "numbered-callout";
+  const lineHeight = annotation.fontSize * (isCode ? 1.34 : 1.28);
+  const paddingX = hasBackground ? Math.max(8, annotation.fontSize * 0.32) : 2;
+  const paddingY = hasBackground ? Math.max(5, annotation.fontSize * 0.22) : 1;
+  const leadingBadgeSize = isNumbered
+    ? Math.max(22, annotation.fontSize * 0.92)
+    : 0;
+
+  return {
+    paddingX,
+    paddingY,
+    lineHeight,
+    fontFamily: isCode
+      ? 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace'
+      : textAnnotationFontFamily,
+    fontWeight: isCode ? 650 : textAnnotationFontWeight,
+    borderRadius:
+      style === "pill" || style === "numbered-callout"
+        ? Math.max(999, annotation.fontSize)
+        : style === "none"
+          ? 0
+          : 8,
+    leadingBadgeSize,
+    leadingGap: isNumbered ? Math.max(8, annotation.fontSize * 0.26) : 0,
+  };
+};
+
+export const getTextRenderColors = (annotation: TextAnnotation) => {
+  switch (annotation.textStyle ?? "pill") {
+    case "none":
+      return {
+        color: annotation.color,
+        backgroundColor: "rgba(255, 255, 255, 0)",
+        borderColor: "rgba(255, 255, 255, 0)",
+      };
+    case "dark-label":
+    case "code-label":
+      return {
+        color: "#ffffff",
+        backgroundColor: "rgba(15, 23, 42, 0.94)",
+        borderColor: "rgba(15, 23, 42, 0.18)",
+      };
+    case "light-label":
+      return {
+        color: "#0f172a",
+        backgroundColor: "rgba(255, 255, 255, 0.94)",
+        borderColor: "rgba(15, 23, 42, 0.16)",
+      };
+    case "warning-label":
+      return {
+        color: "#7c2d12",
+        backgroundColor: "rgba(254, 243, 199, 0.96)",
+        borderColor: "rgba(245, 158, 11, 0.48)",
+      };
+    case "numbered-callout":
+      return {
+        color: "#0f172a",
+        backgroundColor: "rgba(255, 255, 255, 0.96)",
+        borderColor: annotation.color,
+      };
+    case "pill":
+      return {
+        color: annotation.color,
+        backgroundColor: annotation.backgroundColor,
+        borderColor: "rgba(15, 23, 42, 0.12)",
+      };
+  }
+};
 
 export const getAnnotationBounds = (annotation: ImageAnnotation): Bounds => {
   switch (annotation.type) {
@@ -197,7 +298,9 @@ export const getAnnotationBounds = (annotation: ImageAnnotation): Bounds => {
     case "pixelate":
       return expandBounds(
         normalizeRect(annotation.x, annotation.y, annotation.width, annotation.height),
-        annotation.strokeWidth,
+        annotation.type === "rectangle" && annotation.rectangleStyle === "label-badge"
+          ? Math.max(28, annotation.strokeWidth * 6)
+          : annotation.strokeWidth,
       );
     case "pen":
     case "highlighter":
@@ -211,6 +314,43 @@ export const getAnnotationBounds = (annotation: ImageAnnotation): Bounds => {
     case "image":
       return normalizeRect(annotation.x, annotation.y, annotation.width, annotation.height);
   }
+};
+
+export const getAnnotationUnionBounds = (
+  annotations: ImageAnnotation[],
+): Bounds | undefined => {
+  const first = annotations[0];
+
+  if (!first) {
+    return undefined;
+  }
+
+  const firstBounds = getAnnotationBounds(first);
+  const contentBounds = annotations.slice(1).reduce(
+    (bounds, annotation) => {
+      const annotationBounds = getAnnotationBounds(annotation);
+
+      return {
+        minX: Math.min(bounds.minX, annotationBounds.x),
+        minY: Math.min(bounds.minY, annotationBounds.y),
+        maxX: Math.max(bounds.maxX, annotationBounds.x + annotationBounds.width),
+        maxY: Math.max(bounds.maxY, annotationBounds.y + annotationBounds.height),
+      };
+    },
+    {
+      minX: firstBounds.x,
+      minY: firstBounds.y,
+      maxX: firstBounds.x + firstBounds.width,
+      maxY: firstBounds.y + firstBounds.height,
+    },
+  );
+
+  return {
+    x: contentBounds.minX,
+    y: contentBounds.minY,
+    width: contentBounds.maxX - contentBounds.minX,
+    height: contentBounds.maxY - contentBounds.minY,
+  };
 };
 
 export const hitTestAnnotation = (
@@ -275,6 +415,103 @@ export const moveAnnotation = (
         x: annotation.x + deltaX,
         y: annotation.y + deltaY,
       };
+  }
+};
+
+export const transformAnnotationToBounds = (
+  annotation: ImageAnnotation,
+  sourceBounds: Bounds,
+  targetBounds: Bounds,
+): ImageAnnotation => {
+  const scaleX = sourceBounds.width === 0 ? 1 : targetBounds.width / sourceBounds.width;
+  const scaleY = sourceBounds.height === 0 ? 1 : targetBounds.height / sourceBounds.height;
+  const scale = Math.max(0.1, (Math.abs(scaleX) + Math.abs(scaleY)) / 2);
+  const mapPoint = (point: Point): Point => ({
+    x: targetBounds.x + (point.x - sourceBounds.x) * scaleX,
+    y: targetBounds.y + (point.y - sourceBounds.y) * scaleY,
+  });
+  const mapBounds = (bounds: Bounds): Bounds => {
+    const topLeft = mapPoint({ x: bounds.x, y: bounds.y });
+    const bottomRight = mapPoint({
+      x: bounds.x + bounds.width,
+      y: bounds.y + bounds.height,
+    });
+
+    return normalizeRect(
+      topLeft.x,
+      topLeft.y,
+      bottomRight.x - topLeft.x,
+      bottomRight.y - topLeft.y,
+    );
+  };
+
+  switch (annotation.type) {
+    case "arrow":
+      return {
+        ...annotation,
+        start: mapPoint(annotation.start),
+        end: mapPoint(annotation.end),
+      };
+    case "rectangle":
+    case "ellipse":
+    case "pixelate": {
+      const nextBounds = mapBounds(
+        normalizeRect(annotation.x, annotation.y, annotation.width, annotation.height),
+      );
+
+      return {
+        ...annotation,
+        x: nextBounds.x,
+        y: nextBounds.y,
+        width: Math.max(4, nextBounds.width),
+        height: Math.max(4, nextBounds.height),
+      };
+    }
+    case "pen":
+    case "highlighter":
+      return {
+        ...annotation,
+        points: annotation.points.map(mapPoint),
+      };
+    case "text": {
+      const point = mapPoint({ x: annotation.x, y: annotation.y });
+
+      return {
+        ...annotation,
+        x: point.x,
+        y: point.y,
+        fontSize: Math.max(8, annotation.fontSize * scale),
+      };
+    }
+    case "step": {
+      const point = mapPoint({ x: annotation.x, y: annotation.y });
+
+      return {
+        ...annotation,
+        x: point.x,
+        y: point.y,
+        size: Math.max(12, annotation.size * scale),
+      };
+    }
+    case "measure":
+      return {
+        ...annotation,
+        start: mapPoint(annotation.start),
+        end: mapPoint(annotation.end),
+      };
+    case "image": {
+      const nextBounds = mapBounds(
+        normalizeRect(annotation.x, annotation.y, annotation.width, annotation.height),
+      );
+
+      return {
+        ...annotation,
+        x: nextBounds.x,
+        y: nextBounds.y,
+        width: Math.max(4, nextBounds.width),
+        height: Math.max(4, nextBounds.height),
+      };
+    }
   }
 };
 
@@ -350,6 +587,7 @@ export const resizeBounds = (
 const drawAnnotation = (
   context: CanvasRenderingContext2D,
   annotation: ImageAnnotation,
+  options: { measureDeviceScale?: number } = {},
 ) => {
   switch (annotation.type) {
     case "arrow":
@@ -375,7 +613,7 @@ const drawAnnotation = (
       drawStep(context, annotation);
       break;
     case "measure":
-      drawMeasure(context, annotation);
+      drawMeasure(context, annotation, options.measureDeviceScale);
       break;
     case "image":
       drawImageLayer(context, annotation);
@@ -415,24 +653,9 @@ const drawArrow = (
   context: CanvasRenderingContext2D,
   annotation: ArrowAnnotation,
 ) => {
+  const style = annotation.arrowStyle ?? "straight";
   const headLength = Math.max(14, annotation.strokeWidth * 4);
   const headWidth = Math.max(10, annotation.strokeWidth * 3.1);
-  const angle = Math.atan2(
-    annotation.end.y - annotation.start.y,
-    annotation.end.x - annotation.start.x,
-  );
-  const shaftEnd = {
-    x: annotation.end.x - Math.cos(angle) * headLength * 0.72,
-    y: annotation.end.y - Math.sin(angle) * headLength * 0.72,
-  };
-  const baseCenter = {
-    x: annotation.end.x - Math.cos(angle) * headLength,
-    y: annotation.end.y - Math.sin(angle) * headLength,
-  };
-  const normal = {
-    x: Math.cos(angle + Math.PI / 2),
-    y: Math.sin(angle + Math.PI / 2),
-  };
 
   context.save();
   context.globalAlpha = annotation.opacity;
@@ -441,18 +664,180 @@ const drawArrow = (
   context.lineWidth = annotation.strokeWidth;
   context.lineCap = "round";
   context.lineJoin = "round";
-  context.beginPath();
-  context.moveTo(annotation.start.x, annotation.start.y);
-  context.lineTo(shaftEnd.x, shaftEnd.y);
-  context.stroke();
+
+  if (style === "soft-shadow") {
+    context.shadowColor = "rgba(15, 23, 42, 0.28)";
+    context.shadowBlur = Math.max(8, annotation.strokeWidth * 2.5);
+    context.shadowOffsetY = Math.max(2, annotation.strokeWidth * 0.8);
+  }
+
+  if (style === "hand-drawn") {
+    drawHandDrawnArrow(context, annotation, headLength, headWidth);
+    context.restore();
+    return;
+  }
+
+  if (style === "curved") {
+    const control = getCurvedArrowControlPoint(annotation);
+    context.beginPath();
+    context.moveTo(annotation.start.x, annotation.start.y);
+    context.quadraticCurveTo(control.x, control.y, annotation.end.x, annotation.end.y);
+    context.stroke();
+
+    drawArrowHead(
+      context,
+      annotation.end,
+      Math.atan2(annotation.end.y - control.y, annotation.end.x - control.x),
+      headLength,
+      headWidth,
+    );
+
+    context.restore();
+    return;
+  }
+
+  const points =
+    style === "elbow"
+      ? getElbowArrowPoints(annotation)
+      : [annotation.start, annotation.end];
+
+  drawPolyline(context, points);
+
+  if (style !== "line-only") {
+    const previousPoint = points[points.length - 2] ?? annotation.start;
+    drawArrowHead(
+      context,
+      annotation.end,
+      Math.atan2(annotation.end.y - previousPoint.y, annotation.end.x - previousPoint.x),
+      headLength,
+      headWidth,
+    );
+  }
+
+  if (style === "double-ended") {
+    const nextPoint = points[1] ?? annotation.end;
+    drawArrowHead(
+      context,
+      annotation.start,
+      Math.atan2(annotation.start.y - nextPoint.y, annotation.start.x - nextPoint.x),
+      headLength,
+      headWidth,
+    );
+  }
+
+  context.restore();
+};
+
+const drawPolyline = (
+  context: CanvasRenderingContext2D,
+  points: Point[],
+) => {
+  const first = points[0];
+
+  if (!first) {
+    return;
+  }
 
   context.beginPath();
-  context.moveTo(annotation.end.x, annotation.end.y);
-  context.lineTo(baseCenter.x + normal.x * headWidth * 0.5, baseCenter.y + normal.y * headWidth * 0.5);
-  context.lineTo(baseCenter.x - normal.x * headWidth * 0.5, baseCenter.y - normal.y * headWidth * 0.5);
+  context.moveTo(first.x, first.y);
+
+  for (const point of points.slice(1)) {
+    context.lineTo(point.x, point.y);
+  }
+
+  context.stroke();
+};
+
+const drawArrowHead = (
+  context: CanvasRenderingContext2D,
+  point: Point,
+  angle: number,
+  headLength: number,
+  headWidth: number,
+) => {
+  const baseCenter = {
+    x: point.x - Math.cos(angle) * headLength,
+    y: point.y - Math.sin(angle) * headLength,
+  };
+  const normal = {
+    x: Math.cos(angle + Math.PI / 2),
+    y: Math.sin(angle + Math.PI / 2),
+  };
+
+  context.beginPath();
+  context.moveTo(point.x, point.y);
+  context.lineTo(
+    baseCenter.x + normal.x * headWidth * 0.5,
+    baseCenter.y + normal.y * headWidth * 0.5,
+  );
+  context.lineTo(
+    baseCenter.x - normal.x * headWidth * 0.5,
+    baseCenter.y - normal.y * headWidth * 0.5,
+  );
   context.closePath();
   context.fill();
-  context.restore();
+};
+
+const getElbowArrowPoints = (annotation: ArrowAnnotation): Point[] => {
+  const dx = Math.abs(annotation.end.x - annotation.start.x);
+  const dy = Math.abs(annotation.end.y - annotation.start.y);
+  const corner =
+    dx >= dy
+      ? { x: annotation.end.x, y: annotation.start.y }
+      : { x: annotation.start.x, y: annotation.end.y };
+
+  return [annotation.start, corner, annotation.end];
+};
+
+const getCurvedArrowControlPoint = (annotation: ArrowAnnotation): Point => {
+  const midpoint = {
+    x: (annotation.start.x + annotation.end.x) / 2,
+    y: (annotation.start.y + annotation.end.y) / 2,
+  };
+  const dx = annotation.end.x - annotation.start.x;
+  const dy = annotation.end.y - annotation.start.y;
+  const distance = Math.max(1, Math.hypot(dx, dy));
+  const bend = Math.min(96, Math.max(24, distance * 0.22));
+
+  return {
+    x: midpoint.x - (dy / distance) * bend,
+    y: midpoint.y + (dx / distance) * bend,
+  };
+};
+
+const drawHandDrawnArrow = (
+  context: CanvasRenderingContext2D,
+  annotation: ArrowAnnotation,
+  headLength: number,
+  headWidth: number,
+) => {
+  const angle = Math.atan2(
+    annotation.end.y - annotation.start.y,
+    annotation.end.x - annotation.start.x,
+  );
+  const normal = {
+    x: Math.cos(angle + Math.PI / 2),
+    y: Math.sin(angle + Math.PI / 2),
+  };
+  const amount = Math.max(1.2, annotation.strokeWidth * 0.34);
+  const offsets = [-amount, amount * 0.8];
+
+  context.lineWidth = Math.max(1, annotation.strokeWidth * 0.82);
+
+  for (const offset of offsets) {
+    context.beginPath();
+    context.moveTo(
+      annotation.start.x + normal.x * offset,
+      annotation.start.y + normal.y * offset,
+    );
+    context.lineTo(
+      annotation.end.x - Math.cos(angle) * headLength * 0.48 - normal.x * offset * 0.4,
+      annotation.end.y - Math.sin(angle) * headLength * 0.48 - normal.y * offset * 0.4,
+    );
+    context.stroke();
+  }
+
+  drawArrowHead(context, annotation.end, angle, headLength, headWidth);
 };
 
 const drawBox = (
@@ -465,16 +850,99 @@ const drawBox = (
     annotation.width,
     annotation.height,
   );
+  const style = annotation.rectangleStyle ?? "square";
+  const radius = rectangleCornerRadius(style, bounds);
+  const fillColor = rectangleFillColor(annotation, style);
+  const shouldFill = style !== "outline-only" && fillColor !== "rgba(255, 255, 255, 0)";
 
   context.save();
-  context.globalAlpha = annotation.opacity;
+  context.globalAlpha = style === "translucent" ? annotation.opacity * 0.78 : annotation.opacity;
   context.lineWidth = annotation.strokeWidth;
   context.strokeStyle = annotation.strokeColor;
-  context.fillStyle = annotation.fillColor;
-  context.beginPath();
-  context.rect(bounds.x, bounds.y, bounds.width, bounds.height);
-  context.fill();
+  context.fillStyle = fillColor;
+  drawRectanglePath(context, bounds, radius);
+
+  if (shouldFill) {
+    context.fill();
+  }
+
   context.stroke();
+
+  if (style === "label-badge") {
+    drawRectangleLabelBadge(context, bounds, annotation);
+  }
+
+  context.restore();
+};
+
+const drawRectanglePath = (
+  context: CanvasRenderingContext2D,
+  bounds: Bounds,
+  radius: number,
+) => {
+  if (radius <= 0) {
+    context.beginPath();
+    context.rect(bounds.x, bounds.y, bounds.width, bounds.height);
+    return;
+  }
+
+  drawRoundRect(context, bounds.x, bounds.y, bounds.width, bounds.height, radius);
+};
+
+const rectangleCornerRadius = (style: RectangleStyle, bounds: Bounds) => {
+  switch (style) {
+    case "rounded":
+    case "filled":
+    case "translucent":
+    case "label-badge":
+      return Math.min(14, Math.max(6, Math.min(bounds.width, bounds.height) * 0.12));
+    case "square":
+    case "outline-only":
+      return 0;
+  }
+};
+
+const rectangleFillColor = (annotation: BoxAnnotation, style: RectangleStyle) => {
+  switch (style) {
+    case "filled":
+      return colorWithAlpha(annotation.strokeColor, 0.18);
+    case "translucent":
+      return annotation.fillColor === "rgba(255, 255, 255, 0)"
+        ? colorWithAlpha(annotation.strokeColor, 0.1)
+        : annotation.fillColor;
+    case "outline-only":
+      return "rgba(255, 255, 255, 0)";
+    case "square":
+    case "rounded":
+    case "label-badge":
+      return annotation.fillColor;
+  }
+};
+
+const drawRectangleLabelBadge = (
+  context: CanvasRenderingContext2D,
+  bounds: Bounds,
+  annotation: BoxAnnotation,
+) => {
+  const label = "Note";
+  const badgeHeight = Math.max(22, annotation.strokeWidth * 4.5);
+  const badgeWidth = Math.max(58, badgeHeight * 2.65);
+  const x = bounds.x;
+  const y = bounds.y - badgeHeight + Math.max(1, annotation.strokeWidth * 0.5);
+
+  context.save();
+  context.shadowColor = "rgba(15, 23, 42, 0.16)";
+  context.shadowBlur = 8;
+  context.shadowOffsetY = 2;
+  context.fillStyle = annotation.strokeColor;
+  drawRoundRect(context, x, y, badgeWidth, badgeHeight, badgeHeight / 2);
+  context.fill();
+  context.shadowColor = "rgba(15, 23, 42, 0)";
+  context.fillStyle = "#ffffff";
+  context.font = `800 ${Math.round(badgeHeight * 0.48)}px ${textAnnotationFontFamily}`;
+  context.textAlign = "center";
+  context.textBaseline = "middle";
+  context.fillText(label, x + badgeWidth / 2, y + badgeHeight / 2 + 0.5);
   context.restore();
 };
 
@@ -602,6 +1070,7 @@ const drawText = (
   annotation: TextAnnotation,
 ) => {
   const metrics = getTextRenderMetrics(annotation);
+  const colors = getTextRenderColors(annotation);
   const lines = getTextLines(annotation.text);
 
   context.save();
@@ -610,18 +1079,50 @@ const drawText = (
   context.textBaseline = "top";
   const width =
     Math.max(...lines.map((line) => context.measureText(line).width)) +
-    metrics.paddingX * 2;
+    metrics.paddingX * 2 +
+    metrics.leadingBadgeSize +
+    metrics.leadingGap;
   const height = metrics.lineHeight * lines.length + metrics.paddingY * 2;
 
-  context.fillStyle = annotation.backgroundColor;
-  drawRoundRect(context, annotation.x, annotation.y, width, height, metrics.borderRadius);
-  context.fill();
-  context.fillStyle = annotation.color;
+  if ((annotation.textStyle ?? "pill") !== "none") {
+    context.fillStyle = colors.backgroundColor;
+    drawRoundRect(context, annotation.x, annotation.y, width, height, metrics.borderRadius);
+    context.fill();
+
+    if (colors.borderColor !== "rgba(255, 255, 255, 0)") {
+      context.strokeStyle = colors.borderColor;
+      context.lineWidth = 1;
+      context.stroke();
+    }
+  }
+
+  if ((annotation.textStyle ?? "pill") === "numbered-callout") {
+    const badgeRadius = metrics.leadingBadgeSize / 2;
+    const badgeCenter = {
+      x: annotation.x + metrics.paddingX + badgeRadius,
+      y: annotation.y + height / 2,
+    };
+
+    context.fillStyle = annotation.color;
+    context.beginPath();
+    context.arc(badgeCenter.x, badgeCenter.y, badgeRadius, 0, Math.PI * 2);
+    context.fill();
+    context.fillStyle = "#ffffff";
+    context.font = `800 ${Math.round(metrics.leadingBadgeSize * 0.48)}px ${textAnnotationFontFamily}`;
+    context.textAlign = "center";
+    context.textBaseline = "middle";
+    context.fillText("1", badgeCenter.x, badgeCenter.y + 0.5);
+    context.font = getTextAnnotationFont(annotation);
+    context.textAlign = "left";
+    context.textBaseline = "top";
+  }
+
+  context.fillStyle = colors.color;
 
   for (let index = 0; index < lines.length; index += 1) {
     context.fillText(
       lines[index] ?? "",
-      annotation.x + metrics.paddingX,
+      annotation.x + metrics.paddingX + metrics.leadingBadgeSize + metrics.leadingGap,
       annotation.y + metrics.paddingY + index * metrics.lineHeight,
     );
   }
@@ -633,28 +1134,77 @@ const drawStep = (
   context: CanvasRenderingContext2D,
   annotation: StepAnnotation,
 ) => {
-  const radius = annotation.size / 2;
+  const style = annotation.stepStyle ?? "circle";
+  const bounds = getStepBounds(annotation);
+  const radius = style === "circle" || style === "large-tutorial"
+    ? Math.min(bounds.width, bounds.height) / 2
+    : style === "pill"
+      ? bounds.height / 2
+      : Math.max(5, annotation.size * 0.14);
 
   context.save();
   context.globalAlpha = annotation.opacity;
+
+  if (style === "large-tutorial") {
+    context.shadowColor = "rgba(15, 23, 42, 0.28)";
+    context.shadowBlur = Math.max(10, annotation.size * 0.18);
+    context.shadowOffsetY = Math.max(3, annotation.size * 0.08);
+  }
+
   context.fillStyle = annotation.color;
   context.strokeStyle = "rgba(255, 255, 255, 0.92)";
-  context.lineWidth = Math.max(2, annotation.size * 0.08);
-  context.beginPath();
-  context.arc(annotation.x, annotation.y, radius, 0, Math.PI * 2);
+  context.lineWidth = Math.max(2, annotation.size * (style === "small-badge" ? 0.06 : 0.08));
+  drawStepPath(context, bounds, radius, style);
   context.fill();
   context.stroke();
   context.fillStyle = "#ffffff";
-  context.font = `800 ${Math.round(annotation.size * 0.46)}px ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
+  context.shadowColor = "rgba(15, 23, 42, 0)";
+  context.font = `800 ${Math.round(stepFontSize(annotation))}px ${textAnnotationFontFamily}`;
   context.textAlign = "center";
   context.textBaseline = "middle";
   context.fillText(annotation.label, annotation.x, annotation.y + 1);
   context.restore();
 };
 
+const drawStepPath = (
+  context: CanvasRenderingContext2D,
+  bounds: Bounds,
+  radius: number,
+  style: StepAnnotation["stepStyle"] | undefined,
+) => {
+  if (style === "circle" || style === "large-tutorial") {
+    context.beginPath();
+    context.arc(
+      bounds.x + bounds.width / 2,
+      bounds.y + bounds.height / 2,
+      radius,
+      0,
+      Math.PI * 2,
+    );
+    return;
+  }
+
+  drawRoundRect(context, bounds.x, bounds.y, bounds.width, bounds.height, radius);
+};
+
+const stepFontSize = (annotation: StepAnnotation) => {
+  switch (annotation.stepStyle ?? "circle") {
+    case "small-badge":
+      return annotation.size * 0.38;
+    case "large-tutorial":
+      return annotation.size * 0.48;
+    case "pill":
+      return annotation.size * 0.42;
+    case "square":
+    case "circle":
+      return annotation.size * 0.46;
+  }
+};
+
 const drawMeasure = (
   context: CanvasRenderingContext2D,
   annotation: MeasureAnnotation,
+  deviceScale = 1,
 ) => {
   const length = getMeasureLength(annotation);
 
@@ -673,7 +1223,10 @@ const drawMeasure = (
     y: Math.sin(angle + Math.PI / 2),
   };
   const tickSize = Math.max(10, annotation.strokeWidth * 3);
-  const label = `${Math.round(length)} px`;
+  const label =
+    deviceScale > 1.01
+      ? `${Math.round(length)} px / ${Math.round(length * deviceScale)} spx`
+      : `${Math.round(length)} px`;
   const midpoint = {
     x: (annotation.start.x + annotation.end.x) / 2,
     y: (annotation.start.y + annotation.end.y) / 2,
@@ -684,17 +1237,14 @@ const drawMeasure = (
   context.strokeStyle = annotation.color;
   context.fillStyle = annotation.color;
   context.lineWidth = annotation.strokeWidth;
-  context.lineCap = "round";
-  context.lineJoin = "round";
+  context.lineCap = "butt";
+  context.lineJoin = "miter";
   context.beginPath();
   context.moveTo(annotation.start.x, annotation.start.y);
   context.lineTo(annotation.end.x, annotation.end.y);
   context.stroke();
 
-  if (mode === "edge") {
-    drawMeasureCaliperEnd(context, annotation.start, normal, angle, tickSize, 1);
-    drawMeasureCaliperEnd(context, annotation.end, normal, angle, tickSize, -1);
-  } else {
+  if (mode !== "edge") {
     drawMeasureTick(context, annotation.start, normal, tickSize);
     drawMeasureTick(context, annotation.end, normal, tickSize);
   }
@@ -747,35 +1297,6 @@ const getMeasureLength = (annotation: MeasureAnnotation) => {
         annotation.end.y - annotation.start.y,
       );
   }
-};
-
-const drawMeasureCaliperEnd = (
-  context: CanvasRenderingContext2D,
-  point: Point,
-  normal: Point,
-  angle: number,
-  size: number,
-  direction: 1 | -1,
-) => {
-  const tangent = {
-    x: Math.cos(angle) * direction,
-    y: Math.sin(angle) * direction,
-  };
-  const hookSize = Math.max(5, size * 0.3);
-
-  drawMeasureTick(context, point, normal, size);
-  context.beginPath();
-  context.moveTo(point.x - normal.x * size * 0.5, point.y - normal.y * size * 0.5);
-  context.lineTo(
-    point.x - normal.x * size * 0.5 + tangent.x * hookSize,
-    point.y - normal.y * size * 0.5 + tangent.y * hookSize,
-  );
-  context.moveTo(point.x + normal.x * size * 0.5, point.y + normal.y * size * 0.5);
-  context.lineTo(
-    point.x + normal.x * size * 0.5 + tangent.x * hookSize,
-    point.y + normal.y * size * 0.5 + tangent.y * hookSize,
-  );
-  context.stroke();
 };
 
 const drawMeasureGuide = (
@@ -905,6 +1426,24 @@ const colorDistance = (
     first[2] - second[2],
   );
 
+const colorWithAlpha = (color: string, alpha: number) => {
+  const hex = color.match(/^#([\da-f]{2})([\da-f]{2})([\da-f]{2})$/i);
+
+  if (hex) {
+    return `rgba(${Number.parseInt(hex[1] ?? "0", 16)}, ${Number.parseInt(hex[2] ?? "0", 16)}, ${Number.parseInt(hex[3] ?? "0", 16)}, ${alpha})`;
+  }
+
+  const rgb = color.match(
+    /rgba?\(\s*(\d+)[,\s]+(\d+)[,\s]+(\d+)(?:[,\s/]+[\d.]+)?\s*\)/i,
+  );
+
+  if (rgb) {
+    return `rgba(${rgb[1]}, ${rgb[2]}, ${rgb[3]}, ${alpha})`;
+  }
+
+  return color;
+};
+
 const drawCropDraft = (
   context: CanvasRenderingContext2D,
   draft: CropDraft,
@@ -938,9 +1477,10 @@ const drawSelection = (
   context: CanvasRenderingContext2D,
   bounds: Bounds,
   showHandles: boolean,
+  color = selectionColor,
 ) => {
   context.save();
-  context.strokeStyle = selectionColor;
+  context.strokeStyle = color;
   context.lineWidth = 2;
   context.setLineDash([6, 4]);
   context.strokeRect(bounds.x - 4, bounds.y - 4, bounds.width + 8, bounds.height + 8);
@@ -948,7 +1488,7 @@ const drawSelection = (
   if (showHandles) {
     context.setLineDash([]);
     context.fillStyle = "#ffffff";
-    context.strokeStyle = selectionColor;
+    context.strokeStyle = color;
     context.lineWidth = 2;
 
     for (const handle of getResizeHandles(bounds)) {
@@ -964,6 +1504,60 @@ const drawSelection = (
     }
   }
 
+  context.restore();
+};
+
+const drawSnapGuides = (
+  context: CanvasRenderingContext2D,
+  guides: SnapGuide[],
+) => {
+  context.save();
+  context.strokeStyle = snapGuideColor;
+  context.fillStyle = snapGuideColor;
+  context.lineWidth = 1.5;
+  context.setLineDash([5, 4]);
+
+  for (const guide of guides) {
+    context.beginPath();
+
+    if (guide.axis === "x") {
+      context.moveTo(guide.position, guide.min);
+      context.lineTo(guide.position, guide.max);
+    } else {
+      context.moveTo(guide.min, guide.position);
+      context.lineTo(guide.max, guide.position);
+    }
+
+    context.stroke();
+    context.setLineDash([]);
+    context.beginPath();
+
+    if (guide.axis === "x") {
+      context.arc(guide.position, guide.min, 3, 0, Math.PI * 2);
+      context.arc(guide.position, guide.max, 3, 0, Math.PI * 2);
+    } else {
+      context.arc(guide.min, guide.position, 3, 0, Math.PI * 2);
+      context.arc(guide.max, guide.position, 3, 0, Math.PI * 2);
+    }
+
+    context.fill();
+    context.setLineDash([5, 4]);
+  }
+
+  context.restore();
+};
+
+const drawSelectionMarquee = (
+  context: CanvasRenderingContext2D,
+  bounds: Bounds,
+) => {
+  context.save();
+  context.fillStyle = "rgba(14, 165, 233, 0.12)";
+  context.strokeStyle = "rgba(14, 165, 233, 0.95)";
+  context.lineWidth = 1.5;
+  context.setLineDash([6, 4]);
+  context.fillRect(bounds.x, bounds.y, bounds.width, bounds.height);
+  context.strokeRect(bounds.x, bounds.y, bounds.width, bounds.height);
   context.restore();
 };
 
@@ -1257,7 +1851,9 @@ const getTextBounds = (annotation: TextAnnotation): Bounds => {
   const lines = getTextLines(annotation.text);
   const width =
     Math.max(...lines.map((line) => measureTextLine(annotation, line))) +
-    metrics.paddingX * 2;
+    metrics.paddingX * 2 +
+    metrics.leadingBadgeSize +
+    metrics.leadingGap;
   const height = metrics.lineHeight * lines.length + metrics.paddingY * 2;
 
   return {
@@ -1268,12 +1864,30 @@ const getTextBounds = (annotation: TextAnnotation): Bounds => {
   };
 };
 
-const getStepBounds = (annotation: StepAnnotation): Bounds => ({
-  x: annotation.x - annotation.size / 2,
-  y: annotation.y - annotation.size / 2,
-  width: annotation.size,
-  height: annotation.size,
-});
+const getStepBounds = (annotation: StepAnnotation): Bounds => {
+  const style = annotation.stepStyle ?? "circle";
+  const fontWidth = Math.max(
+    annotation.size * 0.5,
+    annotation.label.length * stepFontSize(annotation) * 0.62,
+  );
+  const width =
+    style === "pill"
+      ? Math.max(annotation.size * 1.55, fontWidth + annotation.size * 0.72)
+      : style === "small-badge"
+        ? Math.max(annotation.size * 0.78, fontWidth + annotation.size * 0.32)
+        : annotation.size * (style === "large-tutorial" ? 1.18 : 1);
+  const height =
+    style === "small-badge"
+      ? annotation.size * 0.78
+      : annotation.size * (style === "large-tutorial" ? 1.18 : 1);
+
+  return {
+    x: annotation.x - width / 2,
+    y: annotation.y - height / 2,
+    width,
+    height,
+  };
+};
 
 const getMeasureBounds = (annotation: MeasureAnnotation): Bounds => {
   const padding = Math.max(32, annotation.strokeWidth * 8);
@@ -1307,14 +1921,16 @@ const getTextLines = (text: string) => {
   return lines.length > 0 ? lines : [""];
 };
 
-const getTextAnnotationFont = (annotation: Pick<TextAnnotation, "fontSize">) => {
+const getTextAnnotationFont = (
+  annotation: Pick<TextAnnotation, "fontSize"> & Partial<Pick<TextAnnotation, "textStyle">>,
+) => {
   const metrics = getTextRenderMetrics(annotation);
 
   return `${metrics.fontWeight} ${annotation.fontSize}px ${metrics.fontFamily}`;
 };
 
 const measureTextLine = (
-  annotation: Pick<TextAnnotation, "fontSize">,
+  annotation: Pick<TextAnnotation, "fontSize"> & Partial<Pick<TextAnnotation, "textStyle">>,
   line: string,
 ) => {
   if (typeof document === "undefined") {

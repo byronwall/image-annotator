@@ -19,7 +19,7 @@ type MeasurePointerOptions = {
 
 type Pixel = [number, number, number];
 
-const edgeSearchRadius = 18;
+const edgeSearchRadius = 32;
 const edgeBandRadius = 7;
 const edgeThreshold = 42;
 

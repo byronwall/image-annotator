@@ -2,16 +2,16 @@
 
 This repo includes a reusable markdown rendering module at:
 
-- `app/src/components/markdown-renderer/`
+- `app/src/components/ui/markdown-renderer/`
 
 Main entry:
 
-- `app/src/components/markdown-renderer/MarkdownRenderer.tsx`
+- `app/src/components/ui/markdown-renderer/MarkdownRenderer.tsx`
 
 ## Basic Usage
 
 ```tsx
-import { MarkdownRenderer } from "~/components/markdown-renderer";
+import { MarkdownRenderer } from "~/components/ui/markdown-renderer";
 
 type Props = {
   markdown: string;
@@ -28,7 +28,7 @@ Wrap the renderer in your layout/container styles. The renderer handles markdown
 
 ```tsx
 import { Box } from "styled-system/jsx";
-import { MarkdownRenderer } from "~/components/markdown-renderer";
+import { MarkdownRenderer } from "~/components/ui/markdown-renderer";
 
 export function MarkdownSection(props: { content: string }) {
   return (
@@ -56,9 +56,9 @@ export function MarkdownSection(props: { content: string }) {
 ## Usage Notes
 
 - The Vite config already includes the required optimize-deps entries for `solid-markdown`.
-- Keep markdown-related customizations inside `app/src/components/markdown-renderer/` so renderer logic, styles, and utilities stay co-located.
+- Keep markdown-related customizations inside `app/src/components/ui/markdown-renderer/` so renderer logic, styles, and utilities stay co-located.
 - If you need custom markdown element behavior, extend `markdownComponents` in:
-  - `app/src/components/markdown-renderer/markdown-components.tsx`
+  - `app/src/components/ui/markdown-renderer/markdown-components.tsx`
 
 ## Optional Direct Imports
 
@@ -69,5 +69,5 @@ import {
   MarkdownRenderer,
   markdownComponents,
   markdownStyles,
-} from "~/components/markdown-renderer";
+} from "~/components/ui/markdown-renderer";
 ```

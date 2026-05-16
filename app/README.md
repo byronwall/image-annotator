@@ -32,6 +32,7 @@ pnpm start
 This app includes additional reusable wrappers and dev scaffolding sourced from `visual-notes`:
 
 - New wrappers: `WrapWhen`, `ClearButton`, `ConfirmDialog`, `PanelPopover`, `SimpleDialog`, `SimplePopover`, `SimpleSelect`
+- Vendored starter UI modules: `console-log-capture`, `markdown-renderer`
 - UI wrapper quality fixes in `button`, `file-upload`, `select`, `tooltip`
 - Added `vitest.config.ts` and scripts for `test` + `type-check`
 - Added `amber` semantic color family and background semantic tokens in Panda config
@@ -54,7 +55,7 @@ Data is persisted to `APP_DATA_DIR`, which defaults to `app/data/*` locally. Doc
 
 Reusable markdown rendering (GFM, syntax-highlighted code blocks, mermaid rendering) is available at:
 
-- `src/components/markdown-renderer/`
+- `src/components/ui/markdown-renderer/`
 
 Usage guide:
 

@@ -17,6 +17,7 @@ import {
   Redo2,
   Ruler,
   Save,
+  ScanLine,
   Square,
   Type,
   Undo2,
@@ -86,6 +87,7 @@ export type ImageEditorToolbarProps = {
   onExpandCanvas: () => void;
   onTrimCanvas: () => void;
   onToggleBeforeAfterMode: () => void;
+  onPasteMeasureTestImage: () => void;
   onSave: () => void;
   onExport: () => void;
   onCopy: () => void;
@@ -110,7 +112,7 @@ export const ImageEditorToolbar = (props: ImageEditorToolbarProps) => {
       flexWrap={{ base: "wrap", lg: "nowrap" }}
       overflowX="auto"
     >
-      <HStack gap="2" minW="0" flex="1" flexWrap="nowrap">
+      <HStack gap="2" minW="max-content" flex="0 0 auto" flexWrap="nowrap">
         <HStack gap="2" mr="1">
           <Tooltip content={props.isHistoryOpen ? "Hide sidebar" : "Show sidebar"}>
             <IconButton
@@ -147,7 +149,7 @@ export const ImageEditorToolbar = (props: ImageEditorToolbarProps) => {
         </HStack>
       </HStack>
 
-      <HStack gap="2" flexWrap="nowrap" justifyContent="end" flexShrink="0">
+      <HStack gap="2" flexWrap="nowrap" justifyContent="end" flexShrink="0" ml="auto">
         <HStack gap="1" flexWrap="nowrap">
           <Tooltip content="Zoom out (-)">
             <IconButton
@@ -262,6 +264,10 @@ export const ImageEditorToolbar = (props: ImageEditorToolbarProps) => {
         <Button size="sm" variant="surface" onClick={props.onChooseFile}>
           <Upload />
           Import
+        </Button>
+        <Button size="sm" variant="surface" onClick={props.onPasteMeasureTestImage}>
+          <ScanLine />
+          Test image
         </Button>
         <Button
           size="sm"

@@ -225,7 +225,7 @@ export const ConsoleLogCapturePanel = (props: ConsoleLogCapturePanelProps) => {
       error: testErr,
     });
     console.debug("[vite] hmr", {
-      file: "/src/components/console-log-capture/ConsoleLogCapturePanel.tsx",
+      file: "/src/components/ui/console-log-capture/ConsoleLogCapturePanel.tsx",
     });
     console.trace("[trace] stack sample from ConsoleLogCapturePanel");
     console.table([

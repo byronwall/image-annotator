@@ -50,12 +50,14 @@ Run inside `app/`:
 
 ## Available Feature Modules
 
-- Console log capture/viewer is available at `app/src/components/console-log-capture/`.
+- Console log capture/viewer is available at `app/src/components/ui/console-log-capture/`.
+  - Treat this as a vendored starter UI module.
   - App-level entry: `ConsoleLogCaptureProvider.tsx` (self-managed open state + `Cmd/Ctrl+P` shortcut).
   - Panel entry: `ConsoleLogCapturePanel.tsx`
   - In-module store: `consoleLogCapture.store.ts`
   - Keep related UI/state/utils in this single module folder.
-- Markdown rendering stack is available at `app/src/components/markdown-renderer/`.
+- Markdown rendering stack is available at `app/src/components/ui/markdown-renderer/`.
+  - Treat this as a vendored starter UI module.
   - Main entry: `MarkdownRenderer.tsx`
   - Shared exports: `index.ts`
   - Keep markdown rendering, highlighting, and mermaid helpers co-located in this module folder.

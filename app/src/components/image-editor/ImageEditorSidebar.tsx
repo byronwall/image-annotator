@@ -25,10 +25,10 @@ import {
 
 export type ImageEditorSidebarProps = {
   annotations: ImageAnnotation[];
-  selectedId: string | undefined;
+  selectedIds: string[];
   historyEntries: HistoryEntry[];
   activeHistoryIndex: number;
-  onSelectLayer: (id: string) => void;
+  onSelectLayer: (id: string, mode?: "replace" | "toggle" | "range") => void;
   onToggleLayerVisibility: (id: string) => void;
   onDuplicateLayer: (id: string) => void;
   onBringLayerForward: (id: string) => void;
@@ -100,7 +100,7 @@ export const ImageEditorSidebar = (props: ImageEditorSidebarProps) => {
                   annotation={entry.annotation}
                   layerIndex={entry.index}
                   layerCount={props.annotations.length}
-                  selected={props.selectedId === entry.annotation.id}
+                  selected={props.selectedIds.includes(entry.annotation.id)}
                   onSelect={props.onSelectLayer}
                   onToggleVisibility={props.onToggleLayerVisibility}
                   onDuplicate={props.onDuplicateLayer}
@@ -248,7 +248,7 @@ type LayerRowProps = {
   layerIndex: number;
   layerCount: number;
   selected: boolean;
-  onSelect: (id: string) => void;
+  onSelect: (id: string, mode?: "replace" | "toggle" | "range") => void;
   onToggleVisibility: (id: string) => void;
   onDuplicate: (id: string) => void;
   onBringForward: (id: string) => void;
@@ -278,7 +278,12 @@ const LayerRow = (props: LayerRowProps) => (
       py="1.5"
       borderRadius="l1"
       cursor="pointer"
-      onClick={() => props.onSelect(props.annotation.id)}
+      onClick={(event) =>
+        props.onSelect(
+          props.annotation.id,
+          event.shiftKey ? "range" : event.metaKey || event.ctrlKey ? "toggle" : "replace",
+        )
+      }
     >
       <HStack justifyContent="space-between" gap="2" minW="0">
         <VStack alignItems="start" gap="0" minW="0">

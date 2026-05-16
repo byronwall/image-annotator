@@ -13,6 +13,7 @@ import { Badge } from "~/components/ui/badge";
 import {
   clampBoundsToProject,
   getAnnotationBounds,
+  getAnnotationUnionBounds,
   getBaseImageOffset,
   getBoundsResizeHandleAt,
   getResizeHandleAt,
@@ -21,9 +22,10 @@ import {
   moveAnnotation,
   normalizeRect,
   resizeBounds,
-  resizeAnnotation,
   renderProjectToPngBlob,
+  transformAnnotationToBounds,
   type Bounds,
+  type SnapGuide,
 } from "./image-editor.render";
 import {
   constrainMeasurePointToAxis,
@@ -31,7 +33,7 @@ import {
   measureAxisFromSnap,
   measureEndpointSnapFromInfo,
 } from "./image-editor.measure";
-import { ImageEditorCanvas } from "./ImageEditorCanvas";
+import { ImageEditorCanvas, type SelectionViewAction } from "./ImageEditorCanvas";
 import { ImageEditorSidebar, type SavedImageSummary } from "./ImageEditorSidebar";
 import { ImageEditorToolbar } from "./ImageEditorToolbar";
 import {
@@ -64,7 +66,22 @@ import {
   type MeasurePointerInfo,
   type Point,
   type ResizeHandle,
+  type StylePresetId,
+  type StylableImageEditorTool,
 } from "./image-editor.types";
+import {
+  defaultStylePreferences,
+  hexToFillColor,
+  isStylableTool,
+  loadStylePreferences,
+  mergeBrandPalettes,
+  saveStylePreferences,
+  settingsForStylePreset,
+  toolDefaultSettings,
+  withCustomColor,
+  withRecentColor,
+  type ImageEditorStylePreferences,
+} from "./image-editor.styles";
 
 type DrawingInteraction = {
   type: "draw";
@@ -74,7 +91,7 @@ type DrawingInteraction = {
 
 type MoveInteraction = {
   type: "move";
-  annotationId: string;
+  annotationIds: string[];
   start: Point;
   originalAnnotations: ImageAnnotation[];
   commitLabel?: string;
@@ -82,11 +99,18 @@ type MoveInteraction = {
 
 type ResizeInteraction = {
   type: "resize";
-  annotationId: string;
+  annotationIds: string[];
   handle: ResizeHandle;
   start: Point;
   initialBounds: Bounds;
   originalAnnotations: ImageAnnotation[];
+};
+
+type MarqueeInteraction = {
+  type: "marquee";
+  start: Point;
+  additive: boolean;
+  baseSelectionIds: string[];
 };
 
 type MeasureEndpointHandle = "start" | "end";
@@ -125,6 +149,7 @@ type EditorInteraction =
   | DrawingInteraction
   | MoveInteraction
   | ResizeInteraction
+  | MarqueeInteraction
   | MeasureEndpointInteraction
   | MeasureAnchorInteraction
   | CropMoveInteraction
@@ -137,6 +162,32 @@ type PngExport = {
 
 type CommitProjectOptions = {
   fitToContent?: boolean;
+  preserveCanvas?: boolean;
+};
+
+type SnapMode = "off" | "both" | "horizontal" | "vertical";
+
+type AlignmentCommand = "left" | "center" | "right" | "top" | "middle" | "bottom";
+
+type DistributionAxis = "horizontal" | "vertical";
+
+type SelectionBoundsCommand =
+  | { type: "resize"; edge: "right" | "bottom"; delta: number }
+  | { type: "edge"; edge: "left" | "right" | "top" | "bottom"; delta: number }
+  | { type: "all"; delta: number };
+
+type SnapAxis = "x" | "y";
+
+type SnapTarget = {
+  axis: SnapAxis;
+  position: number;
+  min: number;
+  max: number;
+};
+
+type SnapResult = {
+  bounds: Bounds;
+  guides: SnapGuide[];
 };
 
 export const ImageEditor = () => {
@@ -147,12 +198,21 @@ export const ImageEditor = () => {
   const [historyIndex, setHistoryIndex] = createSignal(-1);
   const [activeTool, setActiveTool] = createSignal<ImageEditorTool>("select");
   const [measureMode, setMeasureMode] = createSignal<MeasureMode>("edge");
+  const [snapMode, setSnapMode] = createSignal<SnapMode>("both");
   const [settings, setSettings] = createSignal<EditorSettings>({
     ...defaultEditorSettings,
   });
+  const [stylePreferences, setStylePreferences] =
+    createSignal<ImageEditorStylePreferences>(defaultStylePreferences());
+  const [styleClipboard, setStyleClipboard] = createSignal<EditorSettings>();
   const [draft, setDraft] = createSignal<EditorDraft>();
-  const [selectedId, setSelectedId] = createSignal<string>();
+  const [selectedIds, setSelectedIds] = createSignal<string[]>([]);
   const [interaction, setInteraction] = createSignal<EditorInteraction>();
+  const [snapGuides, setSnapGuides] = createSignal<SnapGuide[]>([]);
+  const [selectionMarquee, setSelectionMarquee] = createSignal<Bounds>();
+  const [selectionViewAction, setSelectionViewAction] =
+    createSignal<SelectionViewAction>();
+  const [hasLiveExpandedCanvas, setHasLiveExpandedCanvas] = createSignal(false);
   const [isExporting, setIsExporting] = createSignal(false);
   const [isCopying, setIsCopying] = createSignal(false);
   const [isSaving, setIsSaving] = createSignal(false);
@@ -160,7 +220,7 @@ export const ImageEditor = () => {
   const [status, setStatus] = createSignal("Ready for paste, drop, or import.");
   const [zoom, setZoom] = createSignal<ImageEditorZoom>("fit");
   const [annotationClipboard, setAnnotationClipboard] =
-    createSignal<ImageAnnotation>();
+    createSignal<ImageAnnotation[]>([]);
   const [inlineEditingId, setInlineEditingId] = createSignal<string>();
   const [inlineEditOriginalAnnotations, setInlineEditOriginalAnnotations] =
     createSignal<ImageAnnotation[]>();
@@ -170,9 +230,43 @@ export const ImageEditor = () => {
   const [savedImages, setSavedImages] = createSignal<SavedImageSummary[]>([]);
   let keyboardNudgeTimer: number | undefined;
 
+  const selectedId = () => {
+    const ids = selectedIds();
+
+    return ids[ids.length - 1];
+  };
+  const setSelectedId = (id: string | undefined) => setSelectedIds(id ? [id] : []);
+  const selectedAnnotations = createMemo(() => {
+    const currentProject = project();
+
+    if (!currentProject) {
+      return [];
+    }
+
+    return selectedIds()
+      .map((id) => currentProject.annotations.find((annotation) => annotation.id === id))
+      .filter(
+        (annotation): annotation is ImageAnnotation =>
+          annotation !== undefined && !annotation.hidden,
+      );
+  });
   const selectedAnnotation = createMemo(() =>
     project()?.annotations.find((annotation) => annotation.id === selectedId()),
   );
+  const activeStyleTool = createMemo<StylableImageEditorTool | undefined>(() => {
+    const annotation = selectedAnnotation();
+
+    if (annotation && annotation.type !== "image") {
+      return annotation.type;
+    }
+
+    const tool = activeTool();
+    return isStylableTool(tool) ? tool : undefined;
+  });
+  const activeBrandPalettes = createMemo(() =>
+    mergeBrandPalettes(stylePreferences(), project()),
+  );
+  const selectionBounds = createMemo(() => getAnnotationUnionBounds(selectedAnnotations()));
   const inlineEditingAnnotation = createMemo(() => {
     const annotation = project()?.annotations.find(
       (candidate) => candidate.id === inlineEditingId(),
@@ -232,14 +326,18 @@ export const ImageEditor = () => {
   });
 
   createEffect(() => {
-    const id = selectedId();
+    const currentProject = project();
+    const ids = selectedIds();
 
-    if (!id) {
+    if (!currentProject || ids.length === 0) {
       return;
     }
 
-    if (!project()?.annotations.some((annotation) => annotation.id === id)) {
-      setSelectedId(undefined);
+    const availableIds = new Set(currentProject.annotations.map((annotation) => annotation.id));
+    const nextIds = ids.filter((id) => availableIds.has(id));
+
+    if (nextIds.length !== ids.length) {
+      setSelectedIds(nextIds);
     }
   });
 
@@ -257,6 +355,7 @@ export const ImageEditor = () => {
 
   onMount(() => {
     shellRef?.focus();
+    setStylePreferences(loadStylePreferences(project()));
     void loadSavedImages();
 
     const handlePaste = (event: ClipboardEvent) => {
@@ -333,6 +432,68 @@ export const ImageEditor = () => {
     }, 350);
   };
 
+  const clearInteractionGuides = () => {
+    setSnapGuides([]);
+    setSelectionMarquee(undefined);
+  };
+
+  const noteLiveExpansion = (
+    beforeProject: ImageEditorProject,
+    afterProject: ImageEditorProject,
+  ) => {
+    if (
+      beforeProject.width !== afterProject.width ||
+      beforeProject.height !== afterProject.height ||
+      getBaseImageOffset(beforeProject).x !== getBaseImageOffset(afterProject).x ||
+      getBaseImageOffset(beforeProject).y !== getBaseImageOffset(afterProject).y
+    ) {
+      setHasLiveExpandedCanvas(true);
+    }
+  };
+
+  const setSelection = (ids: string[], primaryId?: string) => {
+    const currentProject = project();
+
+    if (!currentProject) {
+      setSelectedIds([]);
+      return;
+    }
+
+    const availableIds = new Set(currentProject.annotations.map((annotation) => annotation.id));
+    const nextIds = ids.filter((id, index) => availableIds.has(id) && ids.indexOf(id) === index);
+    const primary =
+      primaryId && nextIds.includes(primaryId)
+        ? primaryId
+        : nextIds[nextIds.length - 1];
+    const orderedIds =
+      primary === undefined
+        ? nextIds
+        : [...nextIds.filter((id) => id !== primary), primary];
+
+    setSelectedIds(orderedIds);
+  };
+
+  const toggleSelection = (id: string) => {
+    const currentIds = selectedIds();
+
+    if (currentIds.includes(id)) {
+      setSelection(currentIds.filter((candidate) => candidate !== id));
+      return;
+    }
+
+    setSelection([...currentIds, id], id);
+  };
+
+  const selectedLayerIdsForMutation = (fallbackId?: string) => {
+    const ids = selectedIds();
+
+    if (fallbackId && ids.includes(fallbackId)) {
+      return ids;
+    }
+
+    return fallbackId ? [fallbackId] : ids;
+  };
+
   const commitProject = (
     nextProject: ImageEditorProject,
     label: string,
@@ -340,9 +501,11 @@ export const ImageEditor = () => {
   ) => {
     clearKeyboardNudgeTimer();
     const timestamp = Date.now();
-    const expandedProject = options.fitToContent
-      ? fitProjectToContent(nextProject)
-      : expandProjectToAnnotations(nextProject);
+    const expandedProject = options.preserveCanvas
+      ? nextProject
+      : options.fitToContent
+        ? fitProjectToContent(nextProject)
+        : expandProjectToAnnotations(nextProject);
     const snapshot = cloneProject({
       ...expandedProject,
       updatedAt: timestamp,
@@ -360,9 +523,12 @@ export const ImageEditor = () => {
 
     batch(() => {
       setProject(snapshot);
+      setStylePreferences(loadStylePreferences(snapshot));
       setHistory(nextHistory);
       setHistoryIndex(nextHistory.length - 1);
       setStatus(label);
+      clearInteractionGuides();
+      setHasLiveExpandedCanvas(false);
     });
   };
 
@@ -392,6 +558,7 @@ export const ImageEditor = () => {
       setInteraction(undefined);
       setSelectedId(undefined);
       setInlineEditingId(undefined);
+      clearInteractionGuides();
       setProject(cloneProject(entry.project));
       setHistoryIndex(index);
       setStatus(`Restored: ${entry.label}`);
@@ -459,6 +626,22 @@ export const ImageEditor = () => {
     }
   };
 
+  const pasteMeasureTestImage = () => {
+    const nextProject = createMeasureTestProject();
+
+    batch(() => {
+      setSelectedId(undefined);
+      setDraft(undefined);
+      setInteraction(undefined);
+      setInlineEditingId(undefined);
+      setActiveTool("measure");
+      setMeasureMode("edge");
+      setZoom("fit");
+    });
+    commitProject(nextProject, "Created measure test image", { preserveCanvas: true });
+    setStatus("Measure test image: line gaps are labeled in image pixels.");
+  };
+
   const restorePngDataProject = (
     restoredProject: ImageEditorProject,
     restoredLog: Array<{ id: string; label: string; timestamp: number }>,
@@ -517,7 +700,12 @@ export const ImageEditor = () => {
         setInteraction(undefined);
       }
 
+      clearInteractionGuides();
       setActiveTool(tool);
+
+      if (isStylableTool(tool)) {
+        setSettings(toolDefaultSettings(tool, stylePreferences()));
+      }
     });
     setStatus(
       tool === "measure"
@@ -685,12 +873,32 @@ export const ImageEditor = () => {
       return;
     }
 
+    const currentSelectionIds = selectedIds();
+    const currentSelectionBounds = selectionBounds();
+    const groupResizeHandle =
+      currentSelectionIds.length > 1 && currentSelectionBounds
+        ? getBoundsResizeHandleAt(currentSelectionBounds, point)
+        : undefined;
+
+    if (groupResizeHandle && currentSelectionBounds) {
+      setInteraction({
+        type: "resize",
+        annotationIds: currentSelectionIds,
+        handle: groupResizeHandle,
+        start: point,
+        initialBounds: currentSelectionBounds,
+        originalAnnotations: structuredClone(currentProject.annotations),
+      });
+      setActiveTool("select");
+      return;
+    }
+
     const resizeHandle = selected ? getResizeHandleAt(selected, point) : undefined;
 
     if (selected && resizeHandle) {
       setInteraction({
         type: "resize",
-        annotationId: selected.id,
+        annotationIds: [selected.id],
         handle: resizeHandle,
         start: point,
         initialBounds: getAnnotationBounds(selected),
@@ -702,18 +910,36 @@ export const ImageEditor = () => {
 
     if (tool === "select") {
       const hit = findHitAnnotation(currentProject.annotations, point);
-      setSelectedId(hit?.id);
       setInlineEditingId(undefined);
+      const isAdditiveSelection = event.shiftKey || event.metaKey || event.ctrlKey;
 
       if (hit) {
+        if (isAdditiveSelection) {
+          toggleSelection(hit.id);
+          setStatus("Updated selection.");
+          return;
+        }
+
+        const hitSelectionIds = selectedIds().includes(hit.id)
+          ? selectedIds()
+          : [hit.id];
+
+        setSelection(hitSelectionIds, hit.id);
+
         if (event.altKey) {
-          const duplicate = {
-            ...structuredClone(hit),
-            id: createEditorId("layer"),
-            createdAt: Date.now(),
-            hidden: false,
-          };
-          const nextAnnotations = [...currentProject.annotations, duplicate];
+          const duplicates = hitSelectionIds
+            .map((id) =>
+              currentProject.annotations.find((annotation) => annotation.id === id),
+            )
+            .filter((annotation): annotation is ImageAnnotation => annotation !== undefined)
+            .map((annotation) => ({
+              ...structuredClone(annotation),
+              id: createEditorId("layer"),
+              createdAt: Date.now(),
+              hidden: false,
+            }));
+          const duplicateIds = duplicates.map((annotation) => annotation.id);
+          const nextAnnotations = [...currentProject.annotations, ...duplicates];
 
           batch(() => {
             setProject({
@@ -721,13 +947,13 @@ export const ImageEditor = () => {
               annotations: nextAnnotations,
               updatedAt: Date.now(),
             });
-            setSelectedId(duplicate.id);
+            setSelectedIds(duplicateIds);
             setInteraction({
               type: "move",
-              annotationId: duplicate.id,
+              annotationIds: duplicateIds,
               start: point,
               originalAnnotations: structuredClone(nextAnnotations),
-              commitLabel: "Duplicated layer",
+              commitLabel: duplicateIds.length > 1 ? "Duplicated layers" : "Duplicated layer",
             });
           });
           return;
@@ -735,12 +961,23 @@ export const ImageEditor = () => {
 
         setInteraction({
           type: "move",
-          annotationId: hit.id,
+          annotationIds: hitSelectionIds,
           start: point,
           originalAnnotations: structuredClone(currentProject.annotations),
         });
+        return;
       }
 
+      setInteraction({
+        type: "marquee",
+        start: point,
+        additive: isAdditiveSelection,
+        baseSelectionIds: selectedIds(),
+      });
+      setSelectionMarquee(normalizeRect(point.x, point.y, 0, 0));
+      if (!isAdditiveSelection) {
+        setSelectedId(undefined);
+      }
       return;
     }
 
@@ -756,7 +993,7 @@ export const ImageEditor = () => {
         setInlineEditingId(undefined);
         setInteraction({
           type: "move",
-          annotationId: sameToolHit.id,
+          annotationIds: [sameToolHit.id],
           start: point,
           originalAnnotations: structuredClone(currentProject.annotations),
         });
@@ -808,10 +1045,11 @@ export const ImageEditor = () => {
     batch(() => {
       setSelectedId(undefined);
       setDraft(nextDraft);
+      setHasLiveExpandedCanvas(false);
       setInteraction({
         type: "draw",
         tool,
-        start: nextDraft.type === "measure" ? nextDraft.start : point,
+        start: point,
       });
     });
   };
@@ -832,11 +1070,29 @@ export const ImageEditor = () => {
     if (currentInteraction.type === "move") {
       const deltaX = point.x - currentInteraction.start.x;
       const deltaY = point.y - currentInteraction.start.y;
+      const originalSelectionBounds = getAnnotationUnionBounds(
+        currentInteraction.originalAnnotations.filter((annotation) =>
+          currentInteraction.annotationIds.includes(annotation.id),
+        ),
+      );
+      const snapResult = originalSelectionBounds
+        ? snapBounds(
+            currentProject,
+            moveBounds(originalSelectionBounds, deltaX, deltaY),
+            currentInteraction.annotationIds,
+          )
+        : undefined;
+      const finalDeltaX = originalSelectionBounds && snapResult
+        ? snapResult.bounds.x - originalSelectionBounds.x
+        : deltaX;
+      const finalDeltaY = originalSelectionBounds && snapResult
+        ? snapResult.bounds.y - originalSelectionBounds.y
+        : deltaY;
       const nextProject = {
         ...currentProject,
         annotations: currentInteraction.originalAnnotations.map((annotation) =>
-          annotation.id === currentInteraction.annotationId
-            ? moveAnnotation(annotation, deltaX, deltaY)
+          currentInteraction.annotationIds.includes(annotation.id)
+            ? moveAnnotation(annotation, finalDeltaX, finalDeltaY)
             : annotation,
         ),
         updatedAt: Date.now(),
@@ -846,20 +1102,31 @@ export const ImageEditor = () => {
       batch(() => {
         setProject(expanded.project);
         setInteraction(expanded.interaction);
+        setSnapGuides(snapResult?.guides ?? []);
       });
+      noteLiveExpansion(currentProject, expanded.project);
       return;
     }
 
     if (currentInteraction.type === "resize") {
+      const resizedBounds = resizeBounds(
+        currentInteraction.initialBounds,
+        currentInteraction.handle,
+        point,
+      );
+      const snapResult = snapBounds(
+        currentProject,
+        resizedBounds,
+        currentInteraction.annotationIds,
+      );
       const nextProject = {
         ...currentProject,
         annotations: currentInteraction.originalAnnotations.map((annotation) =>
-          annotation.id === currentInteraction.annotationId
-            ? resizeAnnotation(
+          currentInteraction.annotationIds.includes(annotation.id)
+            ? transformAnnotationToBounds(
                 annotation,
                 currentInteraction.initialBounds,
-                currentInteraction.handle,
-                point,
+                snapResult.bounds,
               )
             : annotation,
         ),
@@ -870,6 +1137,38 @@ export const ImageEditor = () => {
       batch(() => {
         setProject(expanded.project);
         setInteraction(expanded.interaction);
+        setSnapGuides(snapResult.guides);
+      });
+      noteLiveExpansion(currentProject, expanded.project);
+      return;
+    }
+
+    if (currentInteraction.type === "marquee") {
+      const marqueeBounds = normalizeRect(
+        currentInteraction.start.x,
+        currentInteraction.start.y,
+        point.x - currentInteraction.start.x,
+        point.y - currentInteraction.start.y,
+      );
+      const hitIds = currentProject.annotations
+        .filter(
+          (annotation) =>
+            !annotation.hidden && intersects(getAnnotationBounds(annotation), marqueeBounds),
+        )
+        .map((annotation) => annotation.id);
+      const nextIds = currentInteraction.additive
+        ? [...currentInteraction.baseSelectionIds, ...hitIds]
+        : hitIds;
+
+      batch(() => {
+        setSelectionMarquee(marqueeBounds);
+        setSelection(
+          nextIds,
+          hitIds[hitIds.length - 1] ??
+            currentInteraction.baseSelectionIds[
+              currentInteraction.baseSelectionIds.length - 1
+            ],
+        );
       });
       return;
     }
@@ -890,6 +1189,7 @@ export const ImageEditor = () => {
         setProject(expanded.project);
         setInteraction(expanded.interaction);
       });
+      noteLiveExpansion(currentProject, expanded.project);
       return;
     }
 
@@ -947,13 +1247,19 @@ export const ImageEditor = () => {
       return;
     }
 
-    const nextDraft = updateDraft(currentDraft, currentInteraction.start, point, {
+    const rawNextDraft = updateDraft(currentDraft, currentInteraction.start, point, {
       centerFromStart: event.altKey,
       constrain: event.shiftKey,
       measureInfo,
     });
+    const snapDraftResult =
+      rawNextDraft.type === "crop"
+        ? { draft: rawNextDraft, guides: [] }
+        : snapDraft(currentProject, rawNextDraft);
+    const nextDraft = snapDraftResult.draft;
 
     if (nextDraft.type === "crop") {
+      setSnapGuides([]);
       setDraft(nextDraft);
       return;
     }
@@ -968,7 +1274,9 @@ export const ImageEditor = () => {
       setProject(expanded.project);
       setDraft(expanded.draft);
       setInteraction(expanded.interaction);
+      setSnapGuides(snapDraftResult.guides);
     });
+    noteLiveExpansion(currentProject, expanded.project);
   };
 
   const handlePointerUp = (
@@ -998,6 +1306,11 @@ export const ImageEditor = () => {
 
     if (currentInteraction.type === "resize") {
       finishResizeInteraction(currentInteraction, point);
+      return;
+    }
+
+    if (currentInteraction.type === "marquee") {
+      finishMarqueeInteraction(currentInteraction, point);
       return;
     }
 
@@ -1071,6 +1384,7 @@ export const ImageEditor = () => {
     batch(() => {
       setInteraction(undefined);
       setDraft(undefined);
+      clearInteractionGuides();
     });
 
     if (
@@ -1088,7 +1402,9 @@ export const ImageEditor = () => {
         annotations: [...currentProject.annotations, currentDraft],
       },
       `Added ${annotationTypeLabel(currentDraft)}`,
+      hasLiveExpandedCanvas() ? { fitToContent: true } : {},
     );
+    setHasLiveExpandedCanvas(false);
     setSelectedId(currentDraft.id);
   };
 
@@ -1099,6 +1415,7 @@ export const ImageEditor = () => {
     batch(() => {
       setInteraction(undefined);
       setDraft(undefined);
+      clearInteractionGuides();
     });
 
     if (!currentProject) {
@@ -1112,16 +1429,21 @@ export const ImageEditor = () => {
       };
 
       if (currentInteraction.commitLabel) {
-        commitProject(nextProject, currentInteraction.commitLabel);
+        commitProject(nextProject, currentInteraction.commitLabel, {
+          fitToContent: true,
+        });
       } else {
         setProject(nextProject);
       }
       return;
     }
 
-    commitProject(currentProject, currentInteraction.commitLabel ?? "Moved layer", {
-      fitToContent: true,
-    });
+    commitProject(
+      currentProject,
+      currentInteraction.commitLabel ??
+        (currentInteraction.annotationIds.length > 1 ? "Moved layers" : "Moved layer"),
+      { fitToContent: true },
+    );
   };
 
   const finishResizeInteraction = (
@@ -1134,6 +1456,7 @@ export const ImageEditor = () => {
     batch(() => {
       setInteraction(undefined);
       setDraft(undefined);
+      clearInteractionGuides();
     });
 
     if (!currentProject) {
@@ -1148,7 +1471,34 @@ export const ImageEditor = () => {
       return;
     }
 
-    commitProject(currentProject, "Resized layer", { fitToContent: true });
+    commitProject(
+      currentProject,
+      currentInteraction.annotationIds.length > 1 ? "Resized selection" : "Resized layer",
+      { fitToContent: true },
+    );
+  };
+
+  const finishMarqueeInteraction = (
+    currentInteraction: MarqueeInteraction,
+    point: Point,
+  ) => {
+    const movedDistance = distance(currentInteraction.start, point);
+
+    batch(() => {
+      setInteraction(undefined);
+      clearInteractionGuides();
+    });
+
+    if (movedDistance < 3) {
+      if (!currentInteraction.additive) {
+        setSelectedId(undefined);
+      }
+      setStatus("Selection cleared.");
+      return;
+    }
+
+    const count = selectedIds().length;
+    setStatus(count === 1 ? "Selected 1 layer." : `Selected ${count} layers.`);
   };
 
   const finishMeasureEndpointInteraction = (
@@ -1161,6 +1511,7 @@ export const ImageEditor = () => {
     batch(() => {
       setInteraction(undefined);
       setDraft(undefined);
+      clearInteractionGuides();
     });
 
     if (!currentProject) {
@@ -1185,6 +1536,7 @@ export const ImageEditor = () => {
     const movedDistance = distance(currentInteraction.start, point);
 
     setInteraction(undefined);
+    clearInteractionGuides();
 
     if (movedDistance >= 1.5) {
       setStatus("Adjusted crop boundary.");
@@ -1444,6 +1796,26 @@ export const ImageEditor = () => {
     void saveImageToServer();
   };
 
+  const updateStylePreferences = (
+    updater: (current: ImageEditorStylePreferences) => ImageEditorStylePreferences,
+  ) => {
+    setStylePreferences((current) => {
+      const next = updater(current);
+      saveStylePreferences(next);
+      return next;
+    });
+  };
+
+  const rememberStyleColors = (patch: Partial<EditorSettings>) => {
+    if (patch.color) {
+      updateStylePreferences((current) => withRecentColor(current, patch.color ?? "", "stroke"));
+    }
+
+    if (patch.fillColor) {
+      updateStylePreferences((current) => withRecentColor(current, patch.fillColor ?? "", "fill"));
+    }
+  };
+
   const handleZoomChange = (nextZoom: ImageEditorZoom) => {
     if (!project()) {
       return;
@@ -1507,23 +1879,97 @@ export const ImageEditor = () => {
       ...patch,
     };
     setSettings(nextSettings);
+    rememberStyleColors(patch);
 
     const currentProject = project();
-    const id = selectedId();
+    const ids = selectedIds();
 
-    if (!currentProject || !id) {
+    if (!currentProject || ids.length === 0) {
       return;
     }
 
+    const idSet = new Set(ids);
     commitProject(
       {
         ...currentProject,
         annotations: currentProject.annotations.map((annotation) =>
-          annotation.id === id ? applySettingsToAnnotation(annotation, nextSettings) : annotation,
+          idSet.has(annotation.id) ? applySettingsToAnnotation(annotation, nextSettings) : annotation,
         ),
       },
-      "Updated layer style",
+      ids.length > 1 ? "Updated selection style" : "Updated layer style",
     );
+  };
+
+  const applyStylePreset = (presetId: StylePresetId) => {
+    const tool = activeStyleTool();
+
+    if (!tool) {
+      setStatus("Select an annotation style target first.");
+      return;
+    }
+
+    const patch = settingsForStylePreset(tool, presetId);
+    handleSettingsChange(patch);
+    setStatus("Applied style preset.");
+  };
+
+  const addCustomColor = (color: string, target: "stroke" | "fill") => {
+    const patch =
+      target === "stroke"
+        ? { color }
+        : { fillColor: hexToFillColor(color) };
+
+    updateStylePreferences((current) => withCustomColor(current, color));
+    handleSettingsChange(patch);
+    setStatus(target === "stroke" ? "Added custom stroke color." : "Added custom fill color.");
+  };
+
+  const makeCurrentStyleDefault = () => {
+    const tool = activeStyleTool();
+
+    if (!tool) {
+      setStatus("Choose a tool or selected annotation first.");
+      return;
+    }
+
+    const nextSettings = settings();
+    updateStylePreferences((current) => ({
+      ...current,
+      toolDefaults: {
+        ...current.toolDefaults,
+        [tool]: nextSettings,
+      },
+    }));
+    setStatus(`${toolLabels[tool]} style saved as the default.`);
+  };
+
+  const copySelectedStyle = () => {
+    const annotation = selectedAnnotation();
+
+    if (!annotation) {
+      setStatus("Select a layer to copy its style.");
+      return;
+    }
+
+    setStyleClipboard(settingsFromAnnotation(annotation, settings()));
+    setStatus("Copied layer style.");
+  };
+
+  const pasteCopiedStyle = () => {
+    const copiedStyle = styleClipboard();
+
+    if (!copiedStyle) {
+      setStatus("Copy a layer style first.");
+      return;
+    }
+
+    if (selectedIds().length === 0) {
+      setStatus("Select a layer to paste the copied style.");
+      return;
+    }
+
+    handleSettingsChange(copiedStyle);
+    setStatus("Pasted layer style.");
   };
 
   const updateAnnotationLive = (
@@ -1620,6 +2066,10 @@ export const ImageEditor = () => {
   };
 
   const startInlineEdit = () => {
+    if (selectedIds().length !== 1) {
+      return;
+    }
+
     const id = selectedId();
 
     if (id) {
@@ -1649,36 +2099,41 @@ export const ImageEditor = () => {
   };
 
   const deleteSelected = () => {
-    const id = selectedId();
+    const ids = selectedIds();
 
-    if (id) {
-      deleteLayer(id);
+    if (ids.length > 0) {
+      deleteLayers(ids);
     }
   };
 
   const deleteLayer = (id: string) => {
+    deleteLayers(selectedLayerIdsForMutation(id));
+  };
+
+  const deleteLayers = (ids: string[]) => {
     const currentProject = project();
 
-    if (!currentProject || !id) {
+    if (!currentProject || ids.length === 0) {
       return;
     }
 
+    const idSet = new Set(ids);
     commitProject(
       {
         ...currentProject,
-        annotations: currentProject.annotations.filter((annotation) => annotation.id !== id),
+        annotations: currentProject.annotations.filter((annotation) => !idSet.has(annotation.id)),
       },
-      "Deleted layer",
+      ids.length > 1 ? "Deleted layers" : "Deleted layer",
     );
     setSelectedId(undefined);
     setInlineEditingId(undefined);
   };
 
   const duplicateSelected = () => {
-    const id = selectedId();
+    const ids = selectedIds();
 
-    if (id) {
-      duplicateLayer(id);
+    if (ids.length > 0) {
+      duplicateLayers(ids);
       return;
     }
 
@@ -1686,106 +2141,121 @@ export const ImageEditor = () => {
   };
 
   const duplicateLayer = (id: string) => {
-    const currentProject = project();
-    const annotation = currentProject?.annotations.find((candidate) => candidate.id === id);
+    duplicateLayers(selectedLayerIdsForMutation(id));
+  };
 
-    if (!currentProject || !annotation) {
+  const duplicateLayers = (ids: string[]) => {
+    const currentProject = project();
+
+    if (!currentProject || ids.length === 0) {
       setStatus("Select a layer to duplicate.");
       return;
     }
 
-    const duplicate = moveAnnotation(
-      {
-        ...structuredClone(annotation),
-        id: createEditorId("layer"),
-        createdAt: Date.now(),
-        hidden: false,
-      },
-      16,
-      16,
-    );
+    const idSet = new Set(ids);
+    const duplicates = currentProject.annotations
+      .filter((annotation) => idSet.has(annotation.id))
+      .map((annotation) =>
+        moveAnnotation(
+          {
+            ...structuredClone(annotation),
+            id: createEditorId("layer"),
+            createdAt: Date.now(),
+            hidden: false,
+          },
+          16,
+          16,
+        ),
+      );
+
+    if (duplicates.length === 0) {
+      return;
+    }
 
     commitProject(
       {
         ...currentProject,
-        annotations: [...currentProject.annotations, duplicate],
+        annotations: [...currentProject.annotations, ...duplicates],
       },
-      "Duplicated layer",
+      duplicates.length > 1 ? "Duplicated layers" : "Duplicated layer",
     );
-    setSelectedId(duplicate.id);
-    setStatus("Duplicated layer.");
+    setSelectedIds(duplicates.map((annotation) => annotation.id));
+    setStatus(duplicates.length > 1 ? "Duplicated layers." : "Duplicated layer.");
   };
 
   const copySelectedAnnotation = () => {
-    const annotation = selectedAnnotation();
+    const annotations = selectedAnnotations();
 
-    if (!annotation) {
+    if (annotations.length === 0) {
       setStatus("Select a layer to copy.");
       return false;
     }
 
-    setAnnotationClipboard(structuredClone(annotation));
-    setStatus("Copied layer.");
+    setAnnotationClipboard(structuredClone(annotations));
+    setStatus(annotations.length > 1 ? "Copied layers." : "Copied layer.");
     return true;
   };
 
   const cutSelectedAnnotation = () => {
     const currentProject = project();
-    const annotation = selectedAnnotation();
+    const annotations = selectedAnnotations();
 
-    if (!currentProject || !annotation) {
+    if (!currentProject || annotations.length === 0) {
       setStatus("Select a layer to cut.");
       return false;
     }
 
-    setAnnotationClipboard(structuredClone(annotation));
+    const idSet = new Set(annotations.map((annotation) => annotation.id));
+    setAnnotationClipboard(structuredClone(annotations));
     commitProject(
       {
         ...currentProject,
         annotations: currentProject.annotations.filter(
-          (candidate) => candidate.id !== annotation.id,
+          (candidate) => !idSet.has(candidate.id),
         ),
       },
-      "Cut layer",
+      annotations.length > 1 ? "Cut layers" : "Cut layer",
     );
     batch(() => {
       setSelectedId(undefined);
       setInlineEditingId(undefined);
     });
-    setStatus("Cut layer.");
+    setStatus(annotations.length > 1 ? "Cut layers." : "Cut layer.");
     return true;
   };
 
   const pasteCopiedAnnotation = () => {
     const currentProject = project();
-    const copiedAnnotation = annotationClipboard();
+    const copiedAnnotations = annotationClipboard();
 
-    if (!currentProject || !copiedAnnotation) {
+    if (!currentProject || copiedAnnotations.length === 0) {
       setStatus("No copied layer to paste.");
       return false;
     }
 
-    const duplicate = moveAnnotation(
-      {
-        ...structuredClone(copiedAnnotation),
-        id: createEditorId("layer"),
-        createdAt: Date.now(),
-        hidden: false,
-      },
-      24,
-      24,
+    const duplicates = copiedAnnotations.map((copiedAnnotation) =>
+      moveAnnotation(
+        {
+          ...structuredClone(copiedAnnotation),
+          id: createEditorId("layer"),
+          createdAt: Date.now(),
+          hidden: false,
+        },
+        24,
+        24,
+      ),
     );
 
     commitProject(
       {
         ...currentProject,
-        annotations: [...currentProject.annotations, duplicate],
+        annotations: [...currentProject.annotations, ...duplicates],
       },
-      "Pasted layer",
+      duplicates.length > 1 ? "Pasted layers" : "Pasted layer",
     );
-    setSelectedId(duplicate.id);
-    setAnnotationClipboard(structuredClone(duplicate));
-    setStatus("Pasted layer.");
+    setSelectedIds(duplicates.map((annotation) => annotation.id));
+    setAnnotationClipboard(structuredClone(duplicates));
+    setStatus(duplicates.length > 1 ? "Pasted layers." : "Pasted layer.");
     return true;
   };
 
@@ -1902,18 +2372,18 @@ export const ImageEditor = () => {
   };
 
   const bringSelectedForward = () => {
-    const id = selectedId();
+    const ids = selectedIds();
 
-    if (id) {
-      bringLayerForward(id);
+    if (ids.length > 0) {
+      reorderLayers(ids, 1, ids.length > 1 ? "Brought layers forward" : "Brought layer forward");
     }
   };
 
   const sendSelectedBackward = () => {
-    const id = selectedId();
+    const ids = selectedIds();
 
-    if (id) {
-      sendLayerBackward(id);
+    if (ids.length > 0) {
+      reorderLayers(ids, -1, ids.length > 1 ? "Sent layers backward" : "Sent layer backward");
     }
   };
 
@@ -1926,28 +2396,51 @@ export const ImageEditor = () => {
   };
 
   const reorderLayer = (id: string, direction: -1 | 1, label: string) => {
+    reorderLayers(selectedLayerIdsForMutation(id), direction, label);
+  };
+
+  const reorderLayers = (ids: string[], direction: -1 | 1, label: string) => {
     const currentProject = project();
 
-    if (!currentProject || !id) {
+    if (!currentProject || ids.length === 0) {
       return;
     }
 
-    const index = currentProject.annotations.findIndex((annotation) => annotation.id === id);
-    const nextIndex = index + direction;
+    const idSet = new Set(ids);
+    const selectedIndexes = currentProject.annotations
+      .map((annotation, index) => (idSet.has(annotation.id) ? index : -1))
+      .filter((index) => index >= 0);
 
-    if (index < 0 || nextIndex < 0 || nextIndex >= currentProject.annotations.length) {
-      setStatus(direction > 0 ? "Layer is already in front." : "Layer is already behind.");
+    if (selectedIndexes.length === 0) {
+      return;
+    }
+
+    const blocked =
+      direction > 0
+        ? selectedIndexes[selectedIndexes.length - 1] === currentProject.annotations.length - 1
+        : selectedIndexes[0] === 0;
+
+    if (blocked) {
+      setStatus(direction > 0 ? "Selection is already in front." : "Selection is already behind.");
       return;
     }
 
     const nextAnnotations = [...currentProject.annotations];
-    const [annotation] = nextAnnotations.splice(index, 1);
+    const indexesToMove = direction > 0 ? [...selectedIndexes].reverse() : selectedIndexes;
 
-    if (!annotation) {
-      return;
+    for (const index of indexesToMove) {
+      const targetIndex = index + direction;
+      const current = nextAnnotations[index];
+      const target = nextAnnotations[targetIndex];
+
+      if (!current || !target || idSet.has(target.id)) {
+        continue;
+      }
+
+      nextAnnotations[index] = target;
+      nextAnnotations[targetIndex] = current;
     }
 
-    nextAnnotations.splice(nextIndex, 0, annotation);
     commitProject(
       {
         ...currentProject,
@@ -1955,15 +2448,56 @@ export const ImageEditor = () => {
       },
       label,
     );
-    setSelectedId(id);
+    setSelection(ids, ids[ids.length - 1]);
     setStatus(label);
   };
 
-  const selectLayer = (id: string) => {
+  const selectLayer = (id: string, mode: "replace" | "toggle" | "range" = "replace") => {
     const annotation = project()?.annotations.find((candidate) => candidate.id === id);
 
     if (!annotation) {
       return;
+    }
+
+    if (mode === "toggle") {
+      toggleSelection(id);
+      setInlineEditingId(undefined);
+      setActiveTool("select");
+      setStatus("Updated selection.");
+      return;
+    }
+
+    if (mode === "range") {
+      const currentProject = project();
+      const anchorId = selectedId();
+      const anchorIndex = currentProject?.annotations.findIndex(
+        (candidate) => candidate.id === anchorId,
+      );
+      const nextIndex = currentProject?.annotations.findIndex(
+        (candidate) => candidate.id === id,
+      );
+
+      if (
+        currentProject &&
+        anchorIndex !== undefined &&
+        nextIndex !== undefined &&
+        anchorIndex >= 0 &&
+        nextIndex >= 0
+      ) {
+        const start = Math.min(anchorIndex, nextIndex);
+        const end = Math.max(anchorIndex, nextIndex);
+        setSelection(
+          currentProject.annotations
+            .slice(start, end + 1)
+            .filter((candidate) => !candidate.hidden)
+            .map((candidate) => candidate.id),
+          id,
+        );
+        setInlineEditingId(undefined);
+        setActiveTool("select");
+        setStatus("Selected layer range.");
+        return;
+      }
     }
 
     batch(() => {
@@ -1997,9 +2531,9 @@ export const ImageEditor = () => {
       nextHidden ? "Hid layer" : "Showed layer",
     );
 
-    if (nextHidden && selectedId() === id) {
+    if (nextHidden && selectedIds().includes(id)) {
       batch(() => {
-        setSelectedId(undefined);
+        setSelection(selectedIds().filter((selectedLayerId) => selectedLayerId !== id));
         setInlineEditingId(undefined);
       });
     }
@@ -2021,22 +2555,27 @@ export const ImageEditor = () => {
 
   const moveSelectedByKeyboard = (deltaX: number, deltaY: number) => {
     const currentProject = project();
-    const id = selectedId();
+    const ids = selectedIds();
 
-    if (!currentProject || !id) {
+    if (!currentProject || ids.length === 0) {
       return;
     }
 
+    const idSet = new Set(ids);
     setProject(expandProjectToAnnotations({
       ...currentProject,
       annotations: currentProject.annotations.map((annotation) =>
-        annotation.id === id ? moveAnnotation(annotation, deltaX, deltaY) : annotation,
+        idSet.has(annotation.id) ? moveAnnotation(annotation, deltaX, deltaY) : annotation,
       ),
       updatedAt: Date.now(),
     }));
-    setSelectedId(id);
+    setSelectedIds(ids);
     scheduleKeyboardNudgeCommit();
-    setStatus(`Nudged layer ${eventNudgeLabel(deltaX, deltaY)}.`);
+    setStatus(
+      ids.length > 1
+        ? `Nudged layers ${eventNudgeLabel(deltaX, deltaY)}.`
+        : `Nudged layer ${eventNudgeLabel(deltaX, deltaY)}.`,
+    );
   };
 
   const cycleSelectedLayer = (direction: -1 | 1) => {
@@ -2081,6 +2620,394 @@ export const ImageEditor = () => {
     setStatus(`Stroke ${nextStrokeWidth}px.`);
   };
 
+  const snapBounds = (
+    currentProject: ImageEditorProject,
+    bounds: Bounds,
+    excludedIds: string[],
+  ): SnapResult => {
+    if (snapMode() === "off") {
+      return { bounds, guides: [] };
+    }
+
+    return snapBoundsToTargets(
+      bounds,
+      buildSnapTargets(currentProject, excludedIds, bounds),
+      snapMode(),
+    );
+  };
+
+  const snapDraft = (
+    currentProject: ImageEditorProject,
+    currentDraft: ImageAnnotation,
+  ): { draft: ImageAnnotation; guides: SnapGuide[] } => {
+    if (snapMode() === "off") {
+      return { draft: currentDraft, guides: [] };
+    }
+
+    if (
+      currentDraft.type === "rectangle" ||
+      currentDraft.type === "ellipse" ||
+      currentDraft.type === "pixelate" ||
+      currentDraft.type === "image"
+    ) {
+      const snapped = snapBounds(
+        currentProject,
+        normalizeRect(currentDraft.x, currentDraft.y, currentDraft.width, currentDraft.height),
+        [],
+      );
+
+      return {
+        draft: {
+          ...currentDraft,
+          x: snapped.bounds.x,
+          y: snapped.bounds.y,
+          width: snapped.bounds.width,
+          height: snapped.bounds.height,
+        },
+        guides: snapped.guides,
+      };
+    }
+
+    if (currentDraft.type === "arrow") {
+      const snapped = snapPointToTargets(
+        currentDraft.end,
+        buildSnapTargets(currentProject, [], getAnnotationBounds(currentDraft)),
+        snapMode(),
+      );
+
+      return {
+        draft: { ...currentDraft, end: snapped.point },
+        guides: snapped.guides,
+      };
+    }
+
+    return { draft: currentDraft, guides: [] };
+  };
+
+  const updateSelectionBounds = (
+    command: SelectionBoundsCommand,
+    label: string,
+  ) => {
+    const currentProject = project();
+    const ids = selectedIds();
+    const bounds = selectionBounds();
+
+    if (!currentProject || ids.length === 0 || !bounds) {
+      setStatus("Select a layer first.");
+      return;
+    }
+
+    const minSize = 4;
+    let nextBounds = { ...bounds };
+
+    if (command.type === "all") {
+      const maxShrink = Math.max(
+        0,
+        Math.min((bounds.width - minSize) / 2, (bounds.height - minSize) / 2),
+      );
+      const delta = command.delta < 0 ? Math.max(command.delta, -maxShrink) : command.delta;
+      nextBounds = {
+        x: bounds.x - delta,
+        y: bounds.y - delta,
+        width: bounds.width + delta * 2,
+        height: bounds.height + delta * 2,
+      };
+    } else if (command.type === "resize") {
+      if (command.edge === "right") {
+        nextBounds = {
+          ...bounds,
+          width: Math.max(minSize, bounds.width + command.delta),
+        };
+      } else {
+        nextBounds = {
+          ...bounds,
+          height: Math.max(minSize, bounds.height + command.delta),
+        };
+      }
+    } else {
+      switch (command.edge) {
+        case "left": {
+          const right = bounds.x + bounds.width;
+          const x = Math.min(bounds.x + command.delta, right - minSize);
+          nextBounds = { ...bounds, x, width: right - x };
+          break;
+        }
+        case "right":
+          nextBounds = {
+            ...bounds,
+            width: Math.max(minSize, bounds.width + command.delta),
+          };
+          break;
+        case "top": {
+          const bottom = bounds.y + bounds.height;
+          const y = Math.min(bounds.y + command.delta, bottom - minSize);
+          nextBounds = { ...bounds, y, height: bottom - y };
+          break;
+        }
+        case "bottom":
+          nextBounds = {
+            ...bounds,
+            height: Math.max(minSize, bounds.height + command.delta),
+          };
+          break;
+      }
+    }
+
+    transformSelectionToBounds(currentProject, ids, bounds, nextBounds, label);
+  };
+
+  const transformSelectionToBounds = (
+    currentProject: ImageEditorProject,
+    ids: string[],
+    sourceBounds: Bounds,
+    targetBounds: Bounds,
+    label: string,
+  ) => {
+    const idSet = new Set(ids);
+
+    commitProject(
+      {
+        ...currentProject,
+        annotations: currentProject.annotations.map((annotation) =>
+          idSet.has(annotation.id)
+            ? transformAnnotationToBounds(annotation, sourceBounds, targetBounds)
+            : annotation,
+        ),
+      },
+      label,
+      { preserveCanvas: true },
+    );
+    setSelectedIds(ids);
+  };
+
+  const alignSelection = (command: AlignmentCommand) => {
+    const currentProject = project();
+    const ids = selectedIds();
+    const bounds = selectionBounds();
+    const annotations = selectedAnnotations();
+
+    if (!currentProject || ids.length < 2 || !bounds) {
+      setStatus("Select at least two layers to align.");
+      return;
+    }
+
+    const deltas = new Map<string, Point>();
+
+    for (const annotation of annotations) {
+      const annotationBounds = getAnnotationBounds(annotation);
+      const delta =
+        command === "left"
+          ? { x: bounds.x - annotationBounds.x, y: 0 }
+          : command === "center"
+            ? {
+                x:
+                  bounds.x +
+                  bounds.width / 2 -
+                  (annotationBounds.x + annotationBounds.width / 2),
+                y: 0,
+              }
+            : command === "right"
+              ? {
+                  x:
+                    bounds.x +
+                    bounds.width -
+                    (annotationBounds.x + annotationBounds.width),
+                  y: 0,
+                }
+              : command === "top"
+                ? { x: 0, y: bounds.y - annotationBounds.y }
+                : command === "middle"
+                  ? {
+                      x: 0,
+                      y:
+                        bounds.y +
+                        bounds.height / 2 -
+                        (annotationBounds.y + annotationBounds.height / 2),
+                    }
+                  : {
+                      x: 0,
+                      y:
+                        bounds.y +
+                        bounds.height -
+                        (annotationBounds.y + annotationBounds.height),
+                    };
+
+      deltas.set(annotation.id, delta);
+    }
+
+    commitProject(
+      {
+        ...currentProject,
+        annotations: currentProject.annotations.map((annotation) => {
+          const delta = deltas.get(annotation.id);
+
+          return delta ? moveAnnotation(annotation, delta.x, delta.y) : annotation;
+        }),
+      },
+      `Aligned ${alignmentLabel(command)}`,
+      { preserveCanvas: true },
+    );
+    setSelectedIds(ids);
+  };
+
+  const distributeSelection = (axis: DistributionAxis) => {
+    const currentProject = project();
+    const ids = selectedIds();
+    const annotations = selectedAnnotations();
+
+    if (!currentProject || annotations.length < 3) {
+      setStatus("Select at least three layers to distribute.");
+      return;
+    }
+
+    const entries = annotations
+      .map((annotation) => ({
+        annotation,
+        bounds: getAnnotationBounds(annotation),
+      }))
+      .sort((first, second) =>
+        axis === "horizontal"
+          ? first.bounds.x - second.bounds.x
+          : first.bounds.y - second.bounds.y,
+      );
+    const first = entries[0];
+    const last = entries[entries.length - 1];
+
+    if (!first || !last) {
+      return;
+    }
+
+    const start = axis === "horizontal" ? first.bounds.x : first.bounds.y;
+    const end =
+      axis === "horizontal"
+        ? last.bounds.x + last.bounds.width
+        : last.bounds.y + last.bounds.height;
+    const totalSize = entries.reduce(
+      (sum, entry) => sum + (axis === "horizontal" ? entry.bounds.width : entry.bounds.height),
+      0,
+    );
+    const gap = (end - start - totalSize) / Math.max(1, entries.length - 1);
+    let cursor = start;
+    const deltas = new Map<string, Point>();
+
+    for (const entry of entries) {
+      const delta =
+        axis === "horizontal"
+          ? { x: cursor - entry.bounds.x, y: 0 }
+          : { x: 0, y: cursor - entry.bounds.y };
+
+      deltas.set(entry.annotation.id, delta);
+      cursor += (axis === "horizontal" ? entry.bounds.width : entry.bounds.height) + gap;
+    }
+
+    commitProject(
+      {
+        ...currentProject,
+        annotations: currentProject.annotations.map((annotation) => {
+          const delta = deltas.get(annotation.id);
+
+          return delta ? moveAnnotation(annotation, delta.x, delta.y) : annotation;
+        }),
+      },
+      axis === "horizontal" ? "Distributed horizontally" : "Distributed vertically",
+      { preserveCanvas: true },
+    );
+    setSelectedIds(ids);
+  };
+
+  const requestSelectionView = (kind: SelectionViewAction["kind"]) => {
+    if (!selectionBounds()) {
+      setStatus("Select a layer first.");
+      return;
+    }
+
+    setSelectionViewAction({ id: createEditorId("view"), kind });
+    setStatus(selectionViewLabel(kind));
+  };
+
+  const smartAdjustSelection = async () => {
+    const currentProject = project();
+    const ids = selectedIds();
+    const annotations = selectedAnnotations();
+
+    if (!currentProject || ids.length === 0 || annotations.length === 0) {
+      setStatus("Select a layer to smart-fit.");
+      return;
+    }
+
+    try {
+      const image = await loadImageElement(currentProject.baseImage.dataUrl);
+      const canvas = document.createElement("canvas");
+      canvas.width = currentProject.width;
+      canvas.height = currentProject.height;
+      const context = canvas.getContext("2d");
+
+      if (!context) {
+        setStatus("Unable to inspect image pixels.");
+        return;
+      }
+
+      const baseOffset = getBaseImageOffset(currentProject);
+      context.drawImage(
+        image,
+        baseOffset.x,
+        baseOffset.y,
+        image.naturalWidth,
+        image.naturalHeight,
+      );
+
+      const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
+      const adjustedBounds = new Map<string, Bounds>();
+
+      for (const annotation of annotations) {
+        const bounds = getAnnotationBounds(annotation);
+        const detected = detectMonotoneBlockBounds(
+          imageData,
+          clampPointToProject(
+            {
+              x: bounds.x + bounds.width / 2,
+              y: bounds.y + bounds.height / 2,
+            },
+            currentProject,
+          ),
+          clampBoundsToProject(expandBoundsBy(bounds, 256), currentProject),
+        );
+
+        if (detected && detected.width >= 4 && detected.height >= 4) {
+          adjustedBounds.set(annotation.id, detected);
+        }
+      }
+
+      if (adjustedBounds.size === 0) {
+        setStatus("No monotone UI block found under the selection.");
+        return;
+      }
+
+      commitProject(
+        {
+          ...currentProject,
+          annotations: currentProject.annotations.map((annotation) => {
+            const targetBounds = adjustedBounds.get(annotation.id);
+
+            return targetBounds
+              ? transformAnnotationToBounds(
+                  annotation,
+                  getAnnotationBounds(annotation),
+                  targetBounds,
+                )
+              : annotation;
+          }),
+        },
+        adjustedBounds.size > 1 ? "Smart-fit layers" : "Smart-fit layer",
+        { preserveCanvas: true },
+      );
+      setSelectedIds(ids);
+      setStatus(adjustedBounds.size > 1 ? "Smart-fit layers." : "Smart-fit layer.");
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Unable to smart-fit selection.");
+    }
+  };
+
   const handleKeyboardShortcut = (event: KeyboardEvent) => {
     if (isEditableTarget(event.target)) {
       return;
@@ -2088,6 +3015,102 @@ export const ImageEditor = () => {
 
     const isPrimaryModifier = event.metaKey || event.ctrlKey;
     const key = event.key.toLowerCase();
+
+    if (isPrimaryModifier && event.altKey && (event.key === "+" || event.key === "=")) {
+      event.preventDefault();
+      updateSelectionBounds(
+        { type: "all", delta: event.shiftKey ? 10 : 1 },
+        "Grew selection bounds",
+      );
+      return;
+    }
+
+    if (isPrimaryModifier && event.altKey && event.key === "-") {
+      event.preventDefault();
+      updateSelectionBounds(
+        { type: "all", delta: event.shiftKey ? -10 : -1 },
+        "Shrank selection bounds",
+      );
+      return;
+    }
+
+    if (isPrimaryModifier && event.altKey && key === "f") {
+      event.preventDefault();
+      requestSelectionView("fit-region");
+      return;
+    }
+
+    if (isPrimaryModifier && event.altKey && key === "1") {
+      event.preventDefault();
+      requestSelectionView("zoom");
+      return;
+    }
+
+    if (isPrimaryModifier && event.altKey && event.key === "[") {
+      event.preventDefault();
+      requestSelectionView("top-left");
+      return;
+    }
+
+    if (isPrimaryModifier && event.altKey && event.key === "]") {
+      event.preventDefault();
+      requestSelectionView("bottom-right");
+      return;
+    }
+
+    if (isPrimaryModifier && event.altKey && key === "r") {
+      event.preventDefault();
+      void smartAdjustSelection();
+      return;
+    }
+
+    if (isPrimaryModifier && event.key.startsWith("Arrow") && selectedIds().length > 0) {
+      event.preventDefault();
+      const amount = event.shiftKey ? 10 : 1;
+
+      if (event.altKey) {
+        const edgeDelta = event.shiftKey ? 10 : 1;
+        const command =
+          event.key === "ArrowLeft"
+            ? ({
+                type: "edge",
+                edge: "left",
+                delta: event.shiftKey ? edgeDelta : -edgeDelta,
+              } satisfies SelectionBoundsCommand)
+            : event.key === "ArrowRight"
+              ? ({
+                  type: "edge",
+                  edge: "right",
+                  delta: event.shiftKey ? -edgeDelta : edgeDelta,
+                } satisfies SelectionBoundsCommand)
+              : event.key === "ArrowUp"
+                ? ({
+                    type: "edge",
+                    edge: "top",
+                    delta: event.shiftKey ? edgeDelta : -edgeDelta,
+                  } satisfies SelectionBoundsCommand)
+                : ({
+                    type: "edge",
+                    edge: "bottom",
+                    delta: event.shiftKey ? -edgeDelta : edgeDelta,
+                  } satisfies SelectionBoundsCommand);
+
+        updateSelectionBounds(command, "Adjusted selection edge");
+        return;
+      }
+
+      const command =
+        event.key === "ArrowRight"
+          ? ({ type: "resize", edge: "right", delta: amount } satisfies SelectionBoundsCommand)
+          : event.key === "ArrowLeft"
+            ? ({ type: "resize", edge: "right", delta: -amount } satisfies SelectionBoundsCommand)
+            : event.key === "ArrowDown"
+              ? ({ type: "resize", edge: "bottom", delta: amount } satisfies SelectionBoundsCommand)
+              : ({ type: "resize", edge: "bottom", delta: -amount } satisfies SelectionBoundsCommand);
+
+      updateSelectionBounds(command, "Resized selection bounds");
+      return;
+    }
 
     if (isPrimaryModifier && key === "z") {
       event.preventDefault();
@@ -2134,7 +3157,7 @@ export const ImageEditor = () => {
     }
 
     if (isPrimaryModifier && key === "v") {
-      if (annotationClipboard()) {
+      if (annotationClipboard().length > 0) {
         event.preventDefault();
         pasteCopiedAnnotation();
       }
@@ -2173,7 +3196,7 @@ export const ImageEditor = () => {
     }
 
     if (event.key === "Delete" || event.key === "Backspace") {
-      if (selectedId()) {
+      if (selectedIds().length > 0) {
         event.preventDefault();
         deleteSelected();
       }
@@ -2254,7 +3277,7 @@ export const ImageEditor = () => {
       return;
     }
 
-    if (event.key.startsWith("Arrow") && selectedId()) {
+    if (event.key.startsWith("Arrow") && selectedIds().length > 0) {
       event.preventDefault();
       const amount = event.shiftKey ? 10 : 1;
       const delta =
@@ -2330,6 +3353,7 @@ export const ImageEditor = () => {
               : "Before/after framing off.",
           );
         }}
+        onPasteMeasureTestImage={pasteMeasureTestImage}
         onSave={handleSave}
         onExport={handleExport}
         onCopy={handleCopy}
@@ -2345,7 +3369,7 @@ export const ImageEditor = () => {
         <Show when={isHistoryOpen()}>
           <ImageEditorSidebar
             annotations={project()?.annotations ?? []}
-            selectedId={selectedId()}
+            selectedIds={selectedIds()}
             historyEntries={history()}
             activeHistoryIndex={historyIndex()}
             onSelectLayer={selectLayer}
@@ -2365,21 +3389,53 @@ export const ImageEditor = () => {
         <ImageEditorCanvas
           project={project()}
           draft={draft()}
-          selectedId={selectedId()}
+          selectedIds={selectedIds()}
           selectedAnnotation={selectedAnnotation()}
+          selectionBounds={selectionBounds()}
+          snapGuides={snapGuides()}
+          selectionMarquee={selectionMarquee()}
+          selectionViewAction={selectionViewAction()}
           inlineEditingAnnotation={visibleInlineEditingAnnotation()}
           activeTool={activeTool()}
+          snapMode={snapMode()}
           measureMode={measureMode()}
           measureAnchor={activeMeasureContext().anchor}
           measureAxis={activeMeasureContext().axis}
           measureStartSnap={activeMeasureContext().startSnap}
           zoom={zoom()}
           settings={settings()}
+          recentColors={stylePreferences().recentColors}
+          recentFillColors={stylePreferences().recentFillColors}
+          customColors={stylePreferences().customColors}
+          brandPalettes={activeBrandPalettes()}
+          canPasteStyle={styleClipboard() !== undefined}
           onChooseFile={chooseFile}
           onFiles={(files) => void importFiles(files, "Dropped image")}
           onZoomChange={handleZoomChange}
           onSettingsChange={handleSettingsChange}
+          onStylePreset={applyStylePreset}
+          onCustomColorChange={addCustomColor}
+          onMakeCurrentStyleDefault={makeCurrentStyleDefault}
+          onCopyStyle={copySelectedStyle}
+          onPasteStyle={pasteCopiedStyle}
           onMeasureModeChange={handleMeasureModeChange}
+          onSnapModeChange={(mode) => {
+            setSnapMode(mode);
+            setSnapGuides([]);
+            setStatus(
+              mode === "off"
+                ? "Object snapping off."
+                : mode === "both"
+                  ? "Object snapping on for X and Y."
+                  : mode === "horizontal"
+                    ? "Object snapping on for X positions."
+                    : "Object snapping on for Y positions.",
+            );
+          }}
+          onAlignSelection={alignSelection}
+          onDistributeSelection={distributeSelection}
+          onSmartAdjustSelection={() => void smartAdjustSelection()}
+          onSelectionView={requestSelectionView}
           onStartInlineEdit={startInlineEdit}
           onInlineEditChange={(id, value) =>
             updateAnnotationLive(id, (annotation) =>
@@ -2455,10 +3511,16 @@ export const ImageEditor = () => {
             <Flex gap="2" direction="column" textStyle="sm">
               <ShortcutRow keys="V A R O P H T S M X C" label="Choose tools" />
               <ShortcutRow keys="+ / -" label="Zoom in or out" />
-              <ShortcutRow keys="Mouse wheel" label="Zoom around cursor" />
-              <ShortcutRow keys="Middle drag / Space drag" label="Pan viewport" />
+              <ShortcutRow keys="Cmd/Ctrl wheel or pinch" label="Zoom around cursor" />
+              <ShortcutRow keys="Two-finger pan / Middle drag / Space drag" label="Pan viewport" />
               <ShortcutRow keys="Enter / double click" label="Edit selected text or step" />
-              <ShortcutRow keys="Arrow keys" label="Nudge selected layer" />
+              <ShortcutRow keys="Shift drag / Shift click" label="Add layers to selection" />
+              <ShortcutRow keys="Arrow keys" label="Nudge selected layers" />
+              <ShortcutRow keys="Cmd/Ctrl Arrow" label="Resize selected bounds" />
+              <ShortcutRow keys="Cmd/Ctrl Alt +/-" label="Grow or shrink selected bounds" />
+              <ShortcutRow keys="Cmd/Ctrl Alt Arrow" label="Grow or shrink an edge" />
+              <ShortcutRow keys="Cmd/Ctrl Alt 1/F/[/]" label="Zoom to selected region" />
+              <ShortcutRow keys="Cmd/Ctrl Alt R" label="Smart-fit selected layers" />
               <ShortcutRow keys="Cmd/Ctrl C, X, V, D" label="Copy, cut, paste, duplicate layers" />
               <ShortcutRow keys="Cmd/Ctrl Z / Shift Z" label="Undo or redo" />
             </Flex>
@@ -2475,6 +3537,388 @@ const ShortcutRow = (props: { keys: string; label: string }) => (
     <Badge variant="subtle" colorPalette="gray">{props.keys}</Badge>
   </HStack>
 );
+
+const snapThreshold = 6;
+
+const alignmentLabel = (command: AlignmentCommand) => {
+  switch (command) {
+    case "left":
+      return "left";
+    case "center":
+      return "center";
+    case "right":
+      return "right";
+    case "top":
+      return "top";
+    case "middle":
+      return "middle";
+    case "bottom":
+      return "bottom";
+  }
+};
+
+const selectionViewLabel = (kind: SelectionViewAction["kind"]) => {
+  switch (kind) {
+    case "zoom":
+      return "Zoomed to selection.";
+    case "fit-region":
+      return "Fit selected region.";
+    case "top-left":
+      return "Focused selection top-left.";
+    case "bottom-right":
+      return "Focused selection bottom-right.";
+  }
+};
+
+const snapBoundsToTargets = (
+  bounds: Bounds,
+  targets: SnapTarget[],
+  mode: SnapMode,
+): SnapResult => {
+  let deltaX = 0;
+  let deltaY = 0;
+  const guides: SnapGuide[] = [];
+  const xAnchors = [bounds.x, bounds.x + bounds.width / 2, bounds.x + bounds.width];
+  const yAnchors = [bounds.y, bounds.y + bounds.height / 2, bounds.y + bounds.height];
+
+  if (snapModeAllowsAxis(mode, "x")) {
+    const snap = nearestSnapDelta(xAnchors, targets.filter((target) => target.axis === "x"));
+
+    if (snap) {
+      deltaX = snap.delta;
+      guides.push({
+        axis: "x",
+        position: snap.target.position,
+        min: Math.min(snap.target.min, bounds.y),
+        max: Math.max(snap.target.max, bounds.y + bounds.height),
+      });
+    }
+  }
+
+  if (snapModeAllowsAxis(mode, "y")) {
+    const snap = nearestSnapDelta(yAnchors, targets.filter((target) => target.axis === "y"));
+
+    if (snap) {
+      deltaY = snap.delta;
+      guides.push({
+        axis: "y",
+        position: snap.target.position,
+        min: Math.min(snap.target.min, bounds.x),
+        max: Math.max(snap.target.max, bounds.x + bounds.width),
+      });
+    }
+  }
+
+  return {
+    bounds: moveBounds(bounds, deltaX, deltaY),
+    guides,
+  };
+};
+
+const snapPointToTargets = (
+  point: Point,
+  targets: SnapTarget[],
+  mode: SnapMode,
+): { point: Point; guides: SnapGuide[] } => {
+  let x = point.x;
+  let y = point.y;
+  const guides: SnapGuide[] = [];
+
+  if (snapModeAllowsAxis(mode, "x")) {
+    const snap = nearestSnapDelta([point.x], targets.filter((target) => target.axis === "x"));
+
+    if (snap) {
+      x += snap.delta;
+      guides.push({
+        axis: "x",
+        position: snap.target.position,
+        min: Math.min(snap.target.min, point.y - 32),
+        max: Math.max(snap.target.max, point.y + 32),
+      });
+    }
+  }
+
+  if (snapModeAllowsAxis(mode, "y")) {
+    const snap = nearestSnapDelta([point.y], targets.filter((target) => target.axis === "y"));
+
+    if (snap) {
+      y += snap.delta;
+      guides.push({
+        axis: "y",
+        position: snap.target.position,
+        min: Math.min(snap.target.min, point.x - 32),
+        max: Math.max(snap.target.max, point.x + 32),
+      });
+    }
+  }
+
+  return { point: { x, y }, guides };
+};
+
+const nearestSnapDelta = (anchors: number[], targets: SnapTarget[]) => {
+  let best:
+    | {
+        delta: number;
+        distance: number;
+        target: SnapTarget;
+      }
+    | undefined;
+
+  for (const anchor of anchors) {
+    for (const target of targets) {
+      const delta = target.position - anchor;
+      const distanceToTarget = Math.abs(delta);
+
+      if (distanceToTarget > snapThreshold) {
+        continue;
+      }
+
+      if (!best || distanceToTarget < best.distance) {
+        best = { delta, distance: distanceToTarget, target };
+      }
+    }
+  }
+
+  return best;
+};
+
+const buildSnapTargets = (
+  project: ImageEditorProject,
+  excludedIds: string[],
+  movingBounds: Bounds,
+): SnapTarget[] => {
+  const targets: SnapTarget[] = [];
+  const excluded = new Set(excludedIds);
+  const pushX = (position: number, min = 0, max = project.height) => {
+    targets.push({ axis: "x", position, min, max });
+  };
+  const pushY = (position: number, min = 0, max = project.width) => {
+    targets.push({ axis: "y", position, min, max });
+  };
+
+  pushX(0);
+  pushX(project.width / 2);
+  pushX(project.width);
+  pushY(0);
+  pushY(project.height / 2);
+  pushY(project.height);
+
+  const baseOffset = getBaseImageOffset(project);
+  const imageBounds = {
+    x: baseOffset.x,
+    y: baseOffset.y,
+    width: project.baseImage.width,
+    height: project.baseImage.height,
+  };
+
+  pushX(imageBounds.x, imageBounds.y, imageBounds.y + imageBounds.height);
+  pushX(imageBounds.x + imageBounds.width / 2, imageBounds.y, imageBounds.y + imageBounds.height);
+  pushX(imageBounds.x + imageBounds.width, imageBounds.y, imageBounds.y + imageBounds.height);
+  pushY(imageBounds.y, imageBounds.x, imageBounds.x + imageBounds.width);
+  pushY(imageBounds.y + imageBounds.height / 2, imageBounds.x, imageBounds.x + imageBounds.width);
+  pushY(imageBounds.y + imageBounds.height, imageBounds.x, imageBounds.x + imageBounds.width);
+
+  const otherBounds = project.annotations
+    .filter((annotation) => !annotation.hidden && !excluded.has(annotation.id))
+    .map(getAnnotationBounds);
+
+  for (const bounds of otherBounds) {
+    pushX(bounds.x, bounds.y, bounds.y + bounds.height);
+    pushX(bounds.x + bounds.width / 2, bounds.y, bounds.y + bounds.height);
+    pushX(bounds.x + bounds.width, bounds.y, bounds.y + bounds.height);
+    pushY(bounds.y, bounds.x, bounds.x + bounds.width);
+    pushY(bounds.y + bounds.height / 2, bounds.x, bounds.x + bounds.width);
+    pushY(bounds.y + bounds.height, bounds.x, bounds.x + bounds.width);
+  }
+
+  addEqualSpacingTargets(otherBounds, movingBounds, targets);
+
+  return targets;
+};
+
+const addEqualSpacingTargets = (
+  otherBounds: Bounds[],
+  movingBounds: Bounds,
+  targets: SnapTarget[],
+) => {
+  const horizontal = [...otherBounds].sort((first, second) => first.x - second.x);
+
+  for (let index = 0; index < horizontal.length - 1; index += 1) {
+    const left = horizontal[index];
+    const right = horizontal[index + 1];
+
+    if (!left || !right || right.x <= left.x + left.width) {
+      continue;
+    }
+
+    const targetLeft = (left.x + left.width + right.x - movingBounds.width) / 2;
+    targets.push({
+      axis: "x",
+      position: targetLeft,
+      min: Math.min(left.y, right.y),
+      max: Math.max(left.y + left.height, right.y + right.height),
+    });
+    targets.push({
+      axis: "x",
+      position: targetLeft + movingBounds.width,
+      min: Math.min(left.y, right.y),
+      max: Math.max(left.y + left.height, right.y + right.height),
+    });
+  }
+
+  const vertical = [...otherBounds].sort((first, second) => first.y - second.y);
+
+  for (let index = 0; index < vertical.length - 1; index += 1) {
+    const top = vertical[index];
+    const bottom = vertical[index + 1];
+
+    if (!top || !bottom || bottom.y <= top.y + top.height) {
+      continue;
+    }
+
+    const targetTop = (top.y + top.height + bottom.y - movingBounds.height) / 2;
+    targets.push({
+      axis: "y",
+      position: targetTop,
+      min: Math.min(top.x, bottom.x),
+      max: Math.max(top.x + top.width, bottom.x + bottom.width),
+    });
+    targets.push({
+      axis: "y",
+      position: targetTop + movingBounds.height,
+      min: Math.min(top.x, bottom.x),
+      max: Math.max(top.x + top.width, bottom.x + bottom.width),
+    });
+  }
+};
+
+const snapModeAllowsAxis = (mode: SnapMode, axis: SnapAxis) =>
+  mode === "both" ||
+  (mode === "horizontal" && axis === "x") ||
+  (mode === "vertical" && axis === "y");
+
+const detectMonotoneBlockBounds = (
+  imageData: ImageData,
+  seedPoint: Point,
+  searchBounds: Bounds,
+): Bounds | undefined => {
+  const width = imageData.width;
+  const height = imageData.height;
+  const seedX = Math.max(0, Math.min(width - 1, Math.round(seedPoint.x)));
+  const seedY = Math.max(0, Math.min(height - 1, Math.round(seedPoint.y)));
+  const target = readPixel(imageData, seedX, seedY);
+
+  if (!target) {
+    return undefined;
+  }
+
+  const left = Math.max(0, Math.floor(searchBounds.x));
+  const top = Math.max(0, Math.floor(searchBounds.y));
+  const right = Math.min(width - 1, Math.ceil(searchBounds.x + searchBounds.width));
+  const bottom = Math.min(height - 1, Math.ceil(searchBounds.y + searchBounds.height));
+  const visited = new Set<number>();
+  const stack: Point[] = [{ x: seedX, y: seedY }];
+  let minX = seedX;
+  let minY = seedY;
+  let maxX = seedX;
+  let maxY = seedY;
+  let count = 0;
+
+  while (stack.length > 0 && count < 350_000) {
+    const point = stack.pop();
+
+    if (!point) {
+      continue;
+    }
+
+    const x = Math.round(point.x);
+    const y = Math.round(point.y);
+
+    if (x < left || x > right || y < top || y > bottom) {
+      continue;
+    }
+
+    const key = y * width + x;
+
+    if (visited.has(key)) {
+      continue;
+    }
+
+    visited.add(key);
+    const pixel = readPixel(imageData, x, y);
+
+    if (!pixel || pixelDistance(target, pixel) > 18) {
+      continue;
+    }
+
+    count += 1;
+    minX = Math.min(minX, x);
+    minY = Math.min(minY, y);
+    maxX = Math.max(maxX, x);
+    maxY = Math.max(maxY, y);
+    stack.push({ x: x + 1, y });
+    stack.push({ x: x - 1, y });
+    stack.push({ x, y: y + 1 });
+    stack.push({ x, y: y - 1 });
+  }
+
+  if (count < 16) {
+    return undefined;
+  }
+
+  return {
+    x: minX,
+    y: minY,
+    width: maxX - minX + 1,
+    height: maxY - minY + 1,
+  };
+};
+
+const readPixel = (
+  imageData: ImageData,
+  x: number,
+  y: number,
+): [number, number, number, number] | undefined => {
+  const index = (y * imageData.width + x) * 4;
+  const data = imageData.data;
+
+  if (index < 0 || index + 3 >= data.length) {
+    return undefined;
+  }
+
+  return [
+    data[index] ?? 0,
+    data[index + 1] ?? 0,
+    data[index + 2] ?? 0,
+    data[index + 3] ?? 0,
+  ];
+};
+
+const pixelDistance = (
+  first: [number, number, number, number],
+  second: [number, number, number, number],
+) =>
+  Math.hypot(
+    first[0] - second[0],
+    first[1] - second[1],
+    first[2] - second[2],
+    (first[3] - second[3]) * 0.5,
+  );
+
+const expandBoundsBy = (bounds: Bounds, amount: number): Bounds => ({
+  x: bounds.x - amount,
+  y: bounds.y - amount,
+  width: bounds.width + amount * 2,
+  height: bounds.height + amount * 2,
+});
+
+const clampPointToProject = (
+  point: Point,
+  project: Pick<ImageEditorProject, "width" | "height">,
+): Point => ({
+  x: Math.max(0, Math.min(project.width - 1, point.x)),
+  y: Math.max(0, Math.min(project.height - 1, point.y)),
+});
 
 const createDraftAnnotation = (
   tool: ImageEditorTool,
@@ -2499,6 +3943,7 @@ const createDraftAnnotation = (
         end: point,
         color: settings.color,
         strokeWidth: settings.strokeWidth,
+        arrowStyle: settings.arrowStyle,
       };
     case "measure": {
       const start = options.measureInfo?.point ?? point;
@@ -2532,6 +3977,7 @@ const createDraftAnnotation = (
         strokeColor: settings.color,
         fillColor: settings.fillColor,
         strokeWidth: settings.strokeWidth,
+        rectangleStyle: settings.rectangleStyle,
       };
     case "pen":
     case "highlighter":
@@ -2706,6 +4152,7 @@ const createTextAnnotation = (
   color: settings.color,
   backgroundColor: settings.fillColor,
   fontSize: settings.fontSize,
+  textStyle: settings.textStyle,
 });
 
 const createStepAnnotation = (
@@ -2726,6 +4173,7 @@ const createStepAnnotation = (
     label: nextNumber.toString(),
     color: settings.color,
     size: Math.max(28, settings.fontSize * 1.35),
+    stepStyle: settings.stepStyle,
   };
 };
 
@@ -3068,6 +4516,7 @@ const shiftInteraction = <T extends EditorInteraction>(
       } as T;
     case "crop-move":
     case "crop-resize":
+    case "marquee":
       return interaction;
   }
 };
@@ -3084,6 +4533,7 @@ const applySettingsToAnnotation = (
         color: settings.color,
         strokeWidth: settings.strokeWidth,
         opacity: settings.opacity,
+        ...(annotation.type === "arrow" ? { arrowStyle: settings.arrowStyle } : {}),
       };
     case "rectangle":
     case "ellipse":
@@ -3094,6 +4544,7 @@ const applySettingsToAnnotation = (
         fillColor: settings.fillColor,
         strokeWidth: settings.strokeWidth,
         opacity: settings.opacity,
+        rectangleStyle: settings.rectangleStyle,
       };
     case "pen":
     case "highlighter":
@@ -3113,6 +4564,7 @@ const applySettingsToAnnotation = (
         backgroundColor: settings.fillColor,
         fontSize: settings.fontSize,
         opacity: settings.opacity,
+        textStyle: settings.textStyle,
       };
     case "step":
       return {
@@ -3120,6 +4572,7 @@ const applySettingsToAnnotation = (
         color: settings.color,
         size: Math.max(28, settings.fontSize * 1.35),
         opacity: settings.opacity,
+        stepStyle: settings.stepStyle,
       };
     case "image":
       return {
@@ -3141,6 +4594,9 @@ const settingsFromAnnotation = (
         color: annotation.color,
         strokeWidth: annotation.strokeWidth,
         opacity: annotation.opacity,
+        ...(annotation.type === "arrow"
+          ? { arrowStyle: annotation.arrowStyle ?? fallback.arrowStyle }
+          : {}),
       };
     case "rectangle":
     case "ellipse":
@@ -3151,6 +4607,7 @@ const settingsFromAnnotation = (
         fillColor: annotation.fillColor,
         strokeWidth: annotation.strokeWidth,
         opacity: annotation.opacity,
+        rectangleStyle: annotation.rectangleStyle ?? fallback.rectangleStyle,
       };
     case "pen":
       return {
@@ -3173,6 +4630,7 @@ const settingsFromAnnotation = (
         fillColor: annotation.backgroundColor,
         fontSize: annotation.fontSize,
         opacity: annotation.opacity,
+        textStyle: annotation.textStyle ?? fallback.textStyle,
       };
     case "step":
       return {
@@ -3180,6 +4638,7 @@ const settingsFromAnnotation = (
         color: annotation.color,
         fontSize: Math.round(annotation.size / 1.35),
         opacity: annotation.opacity,
+        stepStyle: annotation.stepStyle ?? fallback.stepStyle,
       };
     case "image":
       return {
@@ -3194,7 +4653,11 @@ const sameSettings = (first: EditorSettings, second: EditorSettings) =>
   first.fillColor === second.fillColor &&
   first.strokeWidth === second.strokeWidth &&
   first.fontSize === second.fontSize &&
-  first.opacity === second.opacity;
+  first.opacity === second.opacity &&
+  first.arrowStyle === second.arrowStyle &&
+  first.rectangleStyle === second.rectangleStyle &&
+  first.textStyle === second.textStyle &&
+  first.stepStyle === second.stepStyle;
 
 const toolFromShortcut = (key: string): ImageEditorTool | undefined => {
   switch (key.toLowerCase()) {
@@ -3450,6 +4913,117 @@ const fitImageSize = (
     width: Math.max(1, Math.round(width * scale)),
     height: Math.max(1, Math.round(height * scale)),
   };
+};
+
+const createMeasureTestProject = (): ImageEditorProject => {
+  const width = 960;
+  const height = 620;
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext("2d");
+
+  if (!context) {
+    throw new Error("Unable to create measure test image.");
+  }
+
+  context.fillStyle = "#ffffff";
+  context.fillRect(0, 0, width, height);
+
+  context.fillStyle = "#0f172a";
+  context.font = "700 24px ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif";
+  context.textAlign = "left";
+  context.textBaseline = "top";
+  context.fillText("Measure calibration image", 40, 28);
+  context.font = "500 14px ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif";
+  context.fillStyle = "#475569";
+  context.fillText("Labels show the visible inner-edge gap in source image pixels.", 40, 62);
+
+  const verticalGaps = [20, 40, 76, 120, 160];
+  const horizontalGaps = [24, 50, 96, 144, 200];
+  const verticalX = [70, 210, 390, 610, 760];
+
+  verticalGaps.forEach((gap, index) => {
+    drawMeasureTestVerticalGap(context, verticalX[index] ?? 70, 130, gap);
+  });
+
+  horizontalGaps.forEach((gap, index) => {
+    const y = 390 + index * 42;
+    drawMeasureTestHorizontalGap(context, 90, y, gap);
+  });
+
+  const now = Date.now();
+
+  return {
+    version: 1,
+    id: createEditorId("project"),
+    name: "Measure test image",
+    width,
+    height,
+    baseImage: {
+      dataUrl: canvas.toDataURL("image/png"),
+      mimeType: "image/png",
+      width,
+      height,
+    },
+    annotations: [],
+    createdAt: now,
+    updatedAt: now,
+  };
+};
+
+const drawMeasureTestVerticalGap = (
+  context: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  gap: number,
+) => {
+  const lineHeight = 170;
+
+  context.save();
+  context.strokeStyle = "#020617";
+  context.lineWidth = 1;
+  context.beginPath();
+  context.moveTo(x + 0.5, y);
+  context.lineTo(x + 0.5, y + lineHeight);
+  context.moveTo(x + gap + 0.5, y);
+  context.lineTo(x + gap + 0.5, y + lineHeight);
+  context.stroke();
+
+  const visibleGap = Math.max(0, gap - 2);
+  context.fillStyle = "#0f172a";
+  context.font = "700 14px ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif";
+  context.textAlign = "center";
+  context.textBaseline = "top";
+  context.fillText(`${visibleGap}px`, x + gap / 2, y + lineHeight + 14);
+  context.restore();
+};
+
+const drawMeasureTestHorizontalGap = (
+  context: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  gap: number,
+) => {
+  const lineWidth = 720;
+
+  context.save();
+  context.strokeStyle = "#020617";
+  context.lineWidth = 1;
+  context.beginPath();
+  context.moveTo(x, y + 0.5);
+  context.lineTo(x + lineWidth, y + 0.5);
+  context.moveTo(x, y + gap + 0.5);
+  context.lineTo(x + lineWidth, y + gap + 0.5);
+  context.stroke();
+
+  const visibleGap = Math.max(0, gap - 2);
+  context.fillStyle = "#0f172a";
+  context.font = "700 14px ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif";
+  context.textAlign = "left";
+  context.textBaseline = "middle";
+  context.fillText(`${visibleGap}px`, x + lineWidth + 18, y + gap / 2);
+  context.restore();
 };
 
 const drawBeforeAfterPanel = (

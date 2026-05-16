@@ -3,7 +3,7 @@ import type { JSX } from "solid-js";
 import { Box } from "styled-system/jsx";
 import { Input } from "~/components/ui/input";
 import { Textarea } from "~/components/ui/textarea";
-import { getTextRenderMetrics } from "./image-editor.render";
+import { getTextRenderColors, getTextRenderMetrics } from "./image-editor.render";
 import { type StepAnnotation, type TextAnnotation } from "./image-editor.types";
 
 export type EditableAnnotation = TextAnnotation | StepAnnotation;
@@ -134,11 +134,12 @@ const textEditorStyle = (
   scale: number,
 ): JSX.CSSProperties => {
   const metrics = getTextRenderMetrics(annotation);
+  const colors = getTextRenderColors(annotation);
   const visualScale = Math.max(0.01, scale);
 
   return {
-    color: annotation.color,
-    "background-color": annotation.backgroundColor,
+    color: colors.color,
+    "background-color": colors.backgroundColor,
     opacity: annotation.opacity,
     "font-family": metrics.fontFamily,
     "font-size": `${annotation.fontSize * visualScale}px`,
@@ -152,7 +153,7 @@ const textEditorStyle = (
     resize: "none",
     overflow: "hidden",
     "box-sizing": "border-box",
-    "caret-color": annotation.color,
+    "caret-color": colors.color,
     "white-space": "pre",
   };
 };

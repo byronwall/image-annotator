@@ -97,6 +97,7 @@ Local skills imported from the visual-notes workflow are available under `.agent
 
 - `color-palette-check-and-add`
 - `component-structure-minimal-dom`
+- `dense-action-web-app-design`
 - `post-work-doc-playbook`
 - `solid-props-state-patterns`
 - `solid-reactivity-control-flow`

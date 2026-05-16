@@ -63,12 +63,65 @@ export const toolLabels: Record<ImageEditorTool, string> = {
   crop: "Crop",
 };
 
+export type StylableImageEditorTool = Exclude<ImageEditorTool, "select" | "crop">;
+
+export type ArrowStyle =
+  | "straight"
+  | "elbow"
+  | "curved"
+  | "double-ended"
+  | "line-only"
+  | "soft-shadow"
+  | "hand-drawn";
+
+export type RectangleStyle =
+  | "square"
+  | "rounded"
+  | "filled"
+  | "outline-only"
+  | "translucent"
+  | "label-badge";
+
+export type TextAnnotationStyle =
+  | "none"
+  | "pill"
+  | "dark-label"
+  | "light-label"
+  | "warning-label"
+  | "code-label"
+  | "numbered-callout";
+
+export type StepMarkerStyle =
+  | "circle"
+  | "square"
+  | "pill"
+  | "small-badge"
+  | "large-tutorial";
+
+export type StylePresetId =
+  | "product-callout"
+  | "bug-highlight"
+  | "docs-style"
+  | "hand-drawn-review"
+  | "subtle-qa";
+
+export type BrandPalette = {
+  id: string;
+  name: string;
+  colors: string[];
+  fillColors?: string[];
+};
+
 export type EditorSettings = {
   color: string;
   fillColor: string;
   strokeWidth: number;
   fontSize: number;
   opacity: number;
+  arrowStyle: ArrowStyle;
+  rectangleStyle: RectangleStyle;
+  textStyle: TextAnnotationStyle;
+  stepStyle: StepMarkerStyle;
 };
 
 export type BaseAnnotation = {
@@ -84,6 +137,7 @@ export type ArrowAnnotation = BaseAnnotation & {
   end: Point;
   color: string;
   strokeWidth: number;
+  arrowStyle?: ArrowStyle;
 };
 
 export type BoxAnnotation = BaseAnnotation & {
@@ -95,6 +149,7 @@ export type BoxAnnotation = BaseAnnotation & {
   strokeColor: string;
   fillColor: string;
   strokeWidth: number;
+  rectangleStyle?: RectangleStyle;
 };
 
 export type PathAnnotation = BaseAnnotation & {
@@ -112,6 +167,7 @@ export type TextAnnotation = BaseAnnotation & {
   color: string;
   backgroundColor: string;
   fontSize: number;
+  textStyle?: TextAnnotationStyle;
 };
 
 export type StepAnnotation = BaseAnnotation & {
@@ -121,6 +177,7 @@ export type StepAnnotation = BaseAnnotation & {
   label: string;
   color: string;
   size: number;
+  stepStyle?: StepMarkerStyle;
 };
 
 export type MeasureAnnotation = BaseAnnotation & {
@@ -183,6 +240,8 @@ export type ImageEditorProject = {
   height: number;
   baseImage: BaseImageData;
   annotations: ImageAnnotation[];
+  stylePalettes?: BrandPalette[];
+  styleDefaults?: Partial<Record<StylableImageEditorTool, EditorSettings>>;
   createdAt: number;
   updatedAt: number;
 };
@@ -212,6 +271,10 @@ export const defaultEditorSettings: EditorSettings = {
   strokeWidth: 4,
   fontSize: 28,
   opacity: 1,
+  arrowStyle: "straight",
+  rectangleStyle: "square",
+  textStyle: "pill",
+  stepStyle: "circle",
 };
 
 export const createEditorId = (prefix: string) =>
