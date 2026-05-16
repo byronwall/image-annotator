@@ -1,0 +1,4 @@
+interface:
+  display_name: "Playwright Usability Eval"
+  short_description: "Evaluate product tasks and reuse fit with Playwright MCP"
+  default_prompt: "Use $playwright-mcp-usability-evaluation to evaluate this product task through the UI with Playwright MCP and produce a scored usability and general-purpose-fit report under repo-root tmp/evals/."
