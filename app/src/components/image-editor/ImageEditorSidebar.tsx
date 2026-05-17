@@ -4,10 +4,12 @@ import {
   Copy,
   Eye,
   EyeOff,
+  Images,
   Layers3,
+  RefreshCw,
   Trash2,
 } from "lucide-solid";
-import { createMemo, For, Show } from "solid-js";
+import { createMemo, createSignal, For, Show, type JSX } from "solid-js";
 import { Box, HStack, VStack } from "styled-system/jsx";
 import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
@@ -49,7 +51,10 @@ export type SavedImageSummary = {
   url: string;
 };
 
+type SidebarPanel = "layers" | "history" | "saved";
+
 export const ImageEditorSidebar = (props: ImageEditorSidebarProps) => {
+  const [activePanel, setActivePanel] = createSignal<SidebarPanel>("layers");
   const layerEntries = createMemo(() =>
     props.annotations
       .map((annotation, index) => ({ annotation, index }))
@@ -74,23 +79,45 @@ export const ImageEditorSidebar = (props: ImageEditorSidebarProps) => {
       bg="bg.default"
       overflowY="auto"
     >
-      <VStack alignItems="stretch" gap="3">
-        <HStack alignItems="center" justifyContent="space-between">
-          <HStack gap="2" alignItems="center">
-            <Layers3 size={18} />
-            <Box fontWeight="semibold">Layers</Box>
-          </HStack>
-          <Badge variant="subtle" colorPalette="gray">
-            {visibleLayerCount()} / {props.annotations.length}
-          </Badge>
-        </HStack>
+      <HStack
+        gap="1"
+        p="1"
+        borderWidth="1px"
+        borderColor="border"
+        borderRadius="l2"
+        bg="bg.subtle"
+      >
+        <PanelTab
+          active={activePanel() === "layers"}
+          label="Layers"
+          count={`${visibleLayerCount()}/${props.annotations.length}`}
+          onClick={() => setActivePanel("layers")}
+        />
+        <PanelTab
+          active={activePanel() === "history"}
+          label="History"
+          count={String(props.historyEntries.length)}
+          onClick={() => setActivePanel("history")}
+        />
+        <PanelTab
+          active={activePanel() === "saved"}
+          label="Saved"
+          count={String(props.savedImages.length)}
+          onClick={() => setActivePanel("saved")}
+        />
+      </HStack>
 
+      <Show when={activePanel() === "layers"}>
+        <VStack alignItems="stretch" gap="3">
+          <PanelHeader icon={<Layers3 size={18} />} title="Layers">
+            <Badge variant="subtle" colorPalette="gray">
+              {visibleLayerCount()} / {props.annotations.length}
+            </Badge>
+          </PanelHeader>
         <Show
           when={layerEntries().length > 0}
           fallback={
-            <Text color="fg.muted" textStyle="sm">
-              Annotations will appear here.
-            </Text>
+            <EmptyPanel title="No layers" detail="Draw or paste annotations to build a layer stack." />
           }
         >
           <VStack alignItems="stretch" gap="1.5">
@@ -112,25 +139,21 @@ export const ImageEditorSidebar = (props: ImageEditorSidebarProps) => {
             </For>
           </VStack>
         </Show>
-      </VStack>
+        </VStack>
+      </Show>
 
-      <VStack alignItems="stretch" gap="3">
-        <HStack alignItems="center" justifyContent="space-between">
-          <HStack gap="2" alignItems="center">
-            <HistoryIcon />
-            <Box fontWeight="semibold">History</Box>
-          </HStack>
-          <Text color="fg.muted" textStyle="xs">
-            {props.historyEntries.length}
-          </Text>
-        </HStack>
+      <Show when={activePanel() === "history"}>
+        <VStack alignItems="stretch" gap="3">
+          <PanelHeader icon={<HistoryIcon />} title="History">
+            <Text color="fg.muted" textStyle="xs">
+              {props.historyEntries.length}
+            </Text>
+          </PanelHeader>
 
         <Show
           when={props.historyEntries.length > 0}
           fallback={
-            <Text color="fg.muted" textStyle="sm">
-              New operations will appear here.
-            </Text>
+            <EmptyPanel title="No history" detail="Edits appear here with restore points." />
           }
         >
           <VStack as="ol" alignItems="stretch" gap="1.5" m="0" p="0" listStyle="none">
@@ -176,22 +199,28 @@ export const ImageEditorSidebar = (props: ImageEditorSidebarProps) => {
             </For>
           </VStack>
         </Show>
-      </VStack>
+        </VStack>
+      </Show>
 
-      <VStack alignItems="stretch" gap="3">
-        <HStack alignItems="center" justifyContent="space-between">
-          <Box fontWeight="semibold">Saved images</Box>
-          <Button size="2xs" variant="surface" onClick={props.onRefreshSavedImages}>
-            Refresh
-          </Button>
-        </HStack>
+      <Show when={activePanel() === "saved"}>
+        <VStack alignItems="stretch" gap="3">
+          <PanelHeader icon={<Images size={18} />} title="Saved images">
+            <Tooltip content="Refresh saved images">
+              <IconButton
+                aria-label="Refresh saved images"
+                size="xs"
+                variant="surface"
+                onClick={props.onRefreshSavedImages}
+              >
+                <RefreshCw />
+              </IconButton>
+            </Tooltip>
+          </PanelHeader>
 
         <Show
           when={props.savedImages.length > 0}
           fallback={
-            <Text color="fg.muted" textStyle="sm">
-              Server-saved PNGs will appear here.
-            </Text>
+            <EmptyPanel title="No saved images" detail="Server-saved PNGs are listed here." />
           }
         >
           <VStack alignItems="stretch" gap="2">
@@ -238,10 +267,71 @@ export const ImageEditorSidebar = (props: ImageEditorSidebarProps) => {
             </For>
           </VStack>
         </Show>
-      </VStack>
+        </VStack>
+      </Show>
     </VStack>
   );
 };
+
+const PanelTab = (props: {
+  active: boolean;
+  label: string;
+  count: string;
+  onClick: () => void;
+}) => (
+  <Button
+    size="2xs"
+    variant={props.active ? "solid" : "plain"}
+    colorPalette={props.active ? "blue" : "gray"}
+    flex="1"
+    minW="0"
+    justifyContent="center"
+    onClick={props.onClick}
+  >
+    <Box as="span" overflow="hidden" textOverflow="ellipsis" whiteSpace="nowrap">
+      {props.label}
+    </Box>
+    <Badge variant="subtle" colorPalette={props.active ? "blue" : "gray"}>
+      {props.count}
+    </Badge>
+  </Button>
+);
+
+const PanelHeader = (props: {
+  icon: JSX.Element;
+  title: string;
+  children: JSX.Element;
+}) => (
+  <HStack alignItems="center" justifyContent="space-between">
+    <HStack gap="2" alignItems="center" minW="0">
+      {props.icon}
+      <Box fontWeight="semibold" overflow="hidden" textOverflow="ellipsis" whiteSpace="nowrap">
+        {props.title}
+      </Box>
+    </HStack>
+    {props.children}
+  </HStack>
+);
+
+const EmptyPanel = (props: { title: string; detail: string }) => (
+  <VStack
+    alignItems="start"
+    gap="1"
+    p="3"
+    borderWidth="1px"
+    borderStyle="dashed"
+    borderColor="border"
+    borderRadius="l2"
+    bg="bg.subtle"
+  >
+    <Box textStyle="sm" fontWeight="semibold">
+      {props.title}
+    </Box>
+    <Text color="fg.muted" textStyle="xs">
+      {props.detail}
+    </Text>
+  </VStack>
+);
 
 type LayerRowProps = {
   annotation: ImageAnnotation;

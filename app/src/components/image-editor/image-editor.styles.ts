@@ -30,6 +30,7 @@ const maxCustomColors = 12;
 
 export const stylableTools = [
   "arrow",
+  "line",
   "rectangle",
   "ellipse",
   "pen",
@@ -37,6 +38,7 @@ export const stylableTools = [
   "text",
   "step",
   "measure",
+  "erase",
   "pixelate",
 ] as const satisfies readonly StylableImageEditorTool[];
 
@@ -74,6 +76,10 @@ export const defaultBrandPalettes: BrandPalette[] = [
 ];
 
 export const defaultToolStyleDefaults: Record<StylableImageEditorTool, EditorSettings> = {
+  line: {
+    ...defaultEditorSettings,
+    arrowStyle: "line-only",
+  },
   arrow: {
     ...defaultEditorSettings,
     arrowStyle: "straight",
@@ -114,6 +120,12 @@ export const defaultToolStyleDefaults: Record<StylableImageEditorTool, EditorSet
     ...defaultEditorSettings,
     color: "#0ea5e9",
     strokeWidth: 3,
+  },
+  erase: {
+    ...defaultEditorSettings,
+    color: "#0f172a",
+    fillColor: "rgba(255, 255, 255, 0)",
+    strokeWidth: 4,
   },
   pixelate: {
     ...defaultEditorSettings,

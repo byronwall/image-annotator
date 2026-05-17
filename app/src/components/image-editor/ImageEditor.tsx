@@ -13,6 +13,7 @@ import { Badge } from "~/components/ui/badge";
 import {
   clampBoundsToProject,
   getAnnotationBounds,
+  getAnnotationTextBounds,
   getAnnotationUnionBounds,
   getBaseImageOffset,
   getBoundsResizeHandleAt,
@@ -50,6 +51,9 @@ import {
   defaultEditorSettings,
   toolLabels,
   toolMatchesAnnotation,
+  type AttachedText,
+  type ArrowAnnotation,
+  type BoxAnnotation,
   type CropDraft,
   type EditorDraft,
   type EditorSettings,
@@ -190,45 +194,293 @@ type SnapResult = {
   guides: SnapGuide[];
 };
 
+type ImageEditorHmrSession = {
+  project: ImageEditorProject | undefined;
+  history: HistoryEntry[];
+  historyIndex: number;
+  activeTool: ImageEditorTool;
+  measureMode: MeasureMode;
+  snapMode: SnapMode;
+  settings: EditorSettings;
+  stylePreferences: ImageEditorStylePreferences;
+  styleClipboard: EditorSettings | undefined;
+  draft: EditorDraft | undefined;
+  selectedIds: string[];
+  snapGuides: SnapGuide[];
+  selectionMarquee: Bounds | undefined;
+  hasLiveExpandedCanvas: boolean;
+  isHistoryOpen: boolean;
+  status: string;
+  zoom: ImageEditorZoom;
+  annotationClipboard: ImageAnnotation[];
+  inlineEditingId: string | undefined;
+  inlineEditOriginalAnnotations: ImageAnnotation[] | undefined;
+  hasPendingInlineEdit: boolean;
+  isShortcutsOpen: boolean;
+  isBeforeAfterMode: boolean;
+};
+
+const imageEditorHmrSessionKey = "image-annotator.editor-hmr-session.v1";
+
+const cloneHmrValue = <T,>(value: T | undefined): T | undefined =>
+  value === undefined ? undefined : structuredClone(value);
+
+const cloneHmrHistory = (entries: HistoryEntry[]) =>
+  entries.map((entry) => ({
+    ...entry,
+    project: cloneProject(entry.project),
+  }));
+
+const cloneImageEditorHmrSession = (
+  session: ImageEditorHmrSession,
+): ImageEditorHmrSession => ({
+  project: cloneHmrValue(session.project),
+  history: cloneHmrHistory(session.history),
+  historyIndex: session.historyIndex,
+  activeTool: session.activeTool,
+  measureMode: session.measureMode,
+  snapMode: session.snapMode,
+  settings: { ...session.settings },
+  stylePreferences: structuredClone(session.stylePreferences),
+  styleClipboard: cloneHmrValue(session.styleClipboard),
+  draft: cloneHmrValue(session.draft),
+  selectedIds: [...session.selectedIds],
+  snapGuides: cloneHmrValue(session.snapGuides) ?? [],
+  selectionMarquee: cloneHmrValue(session.selectionMarquee),
+  hasLiveExpandedCanvas: session.hasLiveExpandedCanvas,
+  isHistoryOpen: session.isHistoryOpen,
+  status: session.status,
+  zoom: session.zoom,
+  annotationClipboard: cloneHmrValue(session.annotationClipboard) ?? [],
+  inlineEditingId: session.inlineEditingId,
+  inlineEditOriginalAnnotations: cloneHmrValue(session.inlineEditOriginalAnnotations),
+  hasPendingInlineEdit: session.hasPendingInlineEdit,
+  isShortcutsOpen: session.isShortcutsOpen,
+  isBeforeAfterMode: session.isBeforeAfterMode,
+});
+
+const takeImageEditorHmrSession = () => {
+  const hot = import.meta.hot;
+
+  if (!hot) {
+    return undefined;
+  }
+
+  const session = hot.data[imageEditorHmrSessionKey] as
+    | ImageEditorHmrSession
+    | undefined;
+  delete hot.data[imageEditorHmrSessionKey];
+
+  return session ? cloneImageEditorHmrSession(session) : undefined;
+};
+
+const readPersistedImageEditorHmrSession = () => {
+  if (typeof sessionStorage === "undefined") {
+    return undefined;
+  }
+
+  const raw = sessionStorage.getItem(imageEditorHmrSessionKey);
+
+  if (!raw) {
+    return undefined;
+  }
+
+  sessionStorage.removeItem(imageEditorHmrSessionKey);
+
+  try {
+    return cloneImageEditorHmrSession(JSON.parse(raw) as ImageEditorHmrSession);
+  } catch {
+    return undefined;
+  }
+};
+
+const persistImageEditorHmrSession = (session: ImageEditorHmrSession) => {
+  if (typeof sessionStorage === "undefined") {
+    return;
+  }
+
+  try {
+    sessionStorage.setItem(imageEditorHmrSessionKey, JSON.stringify(session));
+  } catch {
+    return;
+  }
+};
+
+let restoredHmrSession = takeImageEditorHmrSession();
+
+const takeRestoredImageEditorHmrSession = () => {
+  const session = restoredHmrSession;
+  restoredHmrSession = undefined;
+  return session;
+};
+
 export const ImageEditor = () => {
   let fileInputRef: HTMLInputElement | undefined;
   let shellRef: HTMLDivElement | undefined;
-  const [project, setProject] = createSignal<ImageEditorProject>();
-  const [history, setHistory] = createSignal<HistoryEntry[]>([]);
-  const [historyIndex, setHistoryIndex] = createSignal(-1);
-  const [activeTool, setActiveTool] = createSignal<ImageEditorTool>("select");
-  const [measureMode, setMeasureMode] = createSignal<MeasureMode>("edge");
-  const [snapMode, setSnapMode] = createSignal<SnapMode>("both");
+  const initialHmrSession = takeRestoredImageEditorHmrSession();
+  const [project, setProject] = createSignal<ImageEditorProject | undefined>(
+    initialHmrSession?.project,
+  );
+  const [history, setHistory] = createSignal<HistoryEntry[]>(
+    initialHmrSession?.history ?? [],
+  );
+  const [historyIndex, setHistoryIndex] = createSignal(
+    initialHmrSession?.historyIndex ?? -1,
+  );
+  const [activeTool, setActiveTool] = createSignal<ImageEditorTool>(
+    initialHmrSession?.activeTool ?? "select",
+  );
+  const [measureMode, setMeasureMode] = createSignal<MeasureMode>(
+    initialHmrSession?.measureMode ?? "edge",
+  );
+  const [snapMode, setSnapMode] = createSignal<SnapMode>(
+    initialHmrSession?.snapMode ?? "both",
+  );
   const [settings, setSettings] = createSignal<EditorSettings>({
-    ...defaultEditorSettings,
+    ...(initialHmrSession?.settings ?? defaultEditorSettings),
   });
   const [stylePreferences, setStylePreferences] =
-    createSignal<ImageEditorStylePreferences>(defaultStylePreferences());
-  const [styleClipboard, setStyleClipboard] = createSignal<EditorSettings>();
-  const [draft, setDraft] = createSignal<EditorDraft>();
-  const [selectedIds, setSelectedIds] = createSignal<string[]>([]);
+    createSignal<ImageEditorStylePreferences>(
+      initialHmrSession?.stylePreferences ?? defaultStylePreferences(),
+    );
+  const [styleClipboard, setStyleClipboard] = createSignal<EditorSettings | undefined>(
+    initialHmrSession?.styleClipboard,
+  );
+  const [draft, setDraft] = createSignal<EditorDraft | undefined>(
+    initialHmrSession?.draft,
+  );
+  const [selectedIds, setSelectedIds] = createSignal<string[]>(
+    initialHmrSession?.selectedIds ?? [],
+  );
   const [interaction, setInteraction] = createSignal<EditorInteraction>();
-  const [snapGuides, setSnapGuides] = createSignal<SnapGuide[]>([]);
-  const [selectionMarquee, setSelectionMarquee] = createSignal<Bounds>();
+  const [snapGuides, setSnapGuides] = createSignal<SnapGuide[]>(
+    initialHmrSession?.snapGuides ?? [],
+  );
+  const [selectionMarquee, setSelectionMarquee] = createSignal<Bounds | undefined>(
+    initialHmrSession?.selectionMarquee,
+  );
   const [selectionViewAction, setSelectionViewAction] =
     createSignal<SelectionViewAction>();
-  const [hasLiveExpandedCanvas, setHasLiveExpandedCanvas] = createSignal(false);
+  const [hasLiveExpandedCanvas, setHasLiveExpandedCanvas] = createSignal(
+    initialHmrSession?.hasLiveExpandedCanvas ?? false,
+  );
   const [isExporting, setIsExporting] = createSignal(false);
   const [isCopying, setIsCopying] = createSignal(false);
   const [isSaving, setIsSaving] = createSignal(false);
-  const [isHistoryOpen, setIsHistoryOpen] = createSignal(true);
-  const [status, setStatus] = createSignal("Ready for paste, drop, or import.");
-  const [zoom, setZoom] = createSignal<ImageEditorZoom>("fit");
+  const [isHistoryOpen, setIsHistoryOpen] = createSignal(
+    initialHmrSession?.isHistoryOpen ?? true,
+  );
+  const [status, setStatus] = createSignal(
+    initialHmrSession?.status ?? "Ready for paste, drop, or import.",
+  );
+  const [zoom, setZoom] = createSignal<ImageEditorZoom>(
+    initialHmrSession?.zoom ?? "fit",
+  );
   const [annotationClipboard, setAnnotationClipboard] =
-    createSignal<ImageAnnotation[]>([]);
-  const [inlineEditingId, setInlineEditingId] = createSignal<string>();
+    createSignal<ImageAnnotation[]>(initialHmrSession?.annotationClipboard ?? []);
+  const [inlineEditingId, setInlineEditingId] = createSignal<string | undefined>(
+    initialHmrSession?.inlineEditingId,
+  );
   const [inlineEditOriginalAnnotations, setInlineEditOriginalAnnotations] =
-    createSignal<ImageAnnotation[]>();
-  const [hasPendingInlineEdit, setHasPendingInlineEdit] = createSignal(false);
-  const [isShortcutsOpen, setIsShortcutsOpen] = createSignal(false);
-  const [isBeforeAfterMode, setIsBeforeAfterMode] = createSignal(false);
+    createSignal<ImageAnnotation[] | undefined>(
+      initialHmrSession?.inlineEditOriginalAnnotations,
+    );
+  const [hasPendingInlineEdit, setHasPendingInlineEdit] = createSignal(
+    initialHmrSession?.hasPendingInlineEdit ?? false,
+  );
+  const [isShortcutsOpen, setIsShortcutsOpen] = createSignal(
+    initialHmrSession?.isShortcutsOpen ?? false,
+  );
+  const [isBeforeAfterMode, setIsBeforeAfterMode] = createSignal(
+    initialHmrSession?.isBeforeAfterMode ?? false,
+  );
   const [savedImages, setSavedImages] = createSignal<SavedImageSummary[]>([]);
   let keyboardNudgeTimer: number | undefined;
+  let isMounted = true;
+
+  const createHmrSession = (): ImageEditorHmrSession =>
+    cloneImageEditorHmrSession({
+      project: project(),
+      history: history(),
+      historyIndex: historyIndex(),
+      activeTool: activeTool(),
+      measureMode: measureMode(),
+      snapMode: snapMode(),
+      settings: settings(),
+      stylePreferences: stylePreferences(),
+      styleClipboard: styleClipboard(),
+      draft: draft(),
+      selectedIds: selectedIds(),
+      snapGuides: snapGuides(),
+      selectionMarquee: selectionMarquee(),
+      hasLiveExpandedCanvas: hasLiveExpandedCanvas(),
+      isHistoryOpen: isHistoryOpen(),
+      status: status(),
+      zoom: zoom(),
+      annotationClipboard: annotationClipboard(),
+      inlineEditingId: inlineEditingId(),
+      inlineEditOriginalAnnotations: inlineEditOriginalAnnotations(),
+      hasPendingInlineEdit: hasPendingInlineEdit(),
+      isShortcutsOpen: isShortcutsOpen(),
+      isBeforeAfterMode: isBeforeAfterMode(),
+    });
+
+  const restoreImageEditorSession = (session: ImageEditorHmrSession) => {
+    const restoredSession = cloneImageEditorHmrSession(session);
+
+    batch(() => {
+      setProject(restoredSession.project);
+      setHistory(restoredSession.history);
+      setHistoryIndex(restoredSession.historyIndex);
+      setActiveTool(restoredSession.activeTool);
+      setMeasureMode(restoredSession.measureMode);
+      setSnapMode(restoredSession.snapMode);
+      setSettings(restoredSession.settings);
+      setStylePreferences(restoredSession.stylePreferences);
+      setStyleClipboard(restoredSession.styleClipboard);
+      setDraft(restoredSession.draft);
+      setSelectedIds(restoredSession.selectedIds);
+      setInteraction(undefined);
+      setSnapGuides(restoredSession.snapGuides);
+      setSelectionMarquee(restoredSession.selectionMarquee);
+      setSelectionViewAction(undefined);
+      setHasLiveExpandedCanvas(restoredSession.hasLiveExpandedCanvas);
+      setIsExporting(false);
+      setIsCopying(false);
+      setIsSaving(false);
+      setIsHistoryOpen(restoredSession.isHistoryOpen);
+      setStatus(restoredSession.status);
+      setZoom(restoredSession.zoom);
+      setAnnotationClipboard(restoredSession.annotationClipboard);
+      setInlineEditingId(restoredSession.inlineEditingId);
+      setInlineEditOriginalAnnotations(restoredSession.inlineEditOriginalAnnotations);
+      setHasPendingInlineEdit(restoredSession.hasPendingInlineEdit);
+      setIsShortcutsOpen(restoredSession.isShortcutsOpen);
+      setIsBeforeAfterMode(restoredSession.isBeforeAfterMode);
+    });
+  };
+
+  const hot = import.meta.hot;
+
+  if (hot) {
+    const handleBeforeFullReload = () => {
+      if (isMounted) {
+        persistImageEditorHmrSession(createHmrSession());
+      }
+    };
+
+    hot.dispose((data) => {
+      if (isMounted) {
+        data[imageEditorHmrSessionKey] = createHmrSession();
+      }
+    });
+    hot.on("vite:beforeFullReload", handleBeforeFullReload);
+
+    onCleanup(() => {
+      isMounted = false;
+      hot.off("vite:beforeFullReload", handleBeforeFullReload);
+    });
+  }
 
   const selectedId = () => {
     const ids = selectedIds();
@@ -272,7 +524,15 @@ export const ImageEditor = () => {
       (candidate) => candidate.id === inlineEditingId(),
     );
 
-    if (annotation?.type === "text" || annotation?.type === "step") {
+    if (
+      annotation?.type === "text" ||
+      annotation?.type === "step" ||
+      annotation?.type === "arrow" ||
+      annotation?.type === "rectangle" ||
+      annotation?.type === "ellipse" ||
+      annotation?.type === "pixelate" ||
+      annotation?.type === "erase"
+    ) {
       return annotation;
     }
 
@@ -282,7 +542,7 @@ export const ImageEditor = () => {
     const annotation = inlineEditingAnnotation();
     const tool = activeTool();
 
-    if (!annotation || annotation.hidden || (tool !== "select" && tool !== annotation.type)) {
+    if (!annotation || annotation.hidden || (tool !== "select" && !toolMatchesAnnotation(tool, annotation))) {
       return undefined;
     }
 
@@ -354,8 +614,18 @@ export const ImageEditor = () => {
   });
 
   onMount(() => {
+    const persistedSession =
+      initialHmrSession || project()
+        ? undefined
+        : readPersistedImageEditorHmrSession();
+
+    if (persistedSession) {
+      restoreImageEditorSession(persistedSession);
+    } else if (!initialHmrSession) {
+      setStylePreferences(loadStylePreferences(project()));
+    }
+
     shellRef?.focus();
-    setStylePreferences(loadStylePreferences(project()));
     void loadSavedImages();
 
     const handlePaste = (event: ClipboardEvent) => {
@@ -749,6 +1019,20 @@ export const ImageEditor = () => {
       mode === "edge"
         ? "Measure mode: edge snap."
         : "Measure mode: point to point.",
+    );
+  };
+
+  const handleSnapModeChange = (mode: SnapMode) => {
+    setSnapMode(mode);
+    setSnapGuides([]);
+    setStatus(
+      mode === "off"
+        ? "Object snapping off."
+        : mode === "both"
+          ? "Object snapping on for X and Y."
+          : mode === "horizontal"
+            ? "Object snapping on for X positions."
+            : "Object snapping on for Y positions.",
     );
   };
 
@@ -1900,6 +2184,60 @@ export const ImageEditor = () => {
     );
   };
 
+  const handleAttachedTextChange = (patch: Partial<AttachedText>) => {
+    const currentProject = project();
+    const ids = selectedIds();
+
+    if (!currentProject || ids.length === 0) {
+      return;
+    }
+
+    const idSet = new Set(ids);
+    let changed = false;
+    const nextAnnotations = currentProject.annotations.map((annotation) => {
+      if (!idSet.has(annotation.id) || !isShapeTextAnnotation(annotation)) {
+        return annotation;
+      }
+
+      const currentText =
+        annotation.text ?? createAttachedTextForAnnotation(annotation, settings());
+      const nextText = {
+        ...currentText,
+        ...patch,
+      };
+
+      if (sameAttachedText(currentText, nextText)) {
+        return annotation;
+      }
+
+      changed = true;
+      return {
+        ...annotation,
+        text: nextText,
+      };
+    });
+
+    if (!changed) {
+      return;
+    }
+
+    if (typeof patch.fontSize === "number") {
+      setSettings({
+        ...settings(),
+        fontSize: patch.fontSize,
+      });
+    }
+
+    commitProject(
+      {
+        ...currentProject,
+        annotations: nextAnnotations,
+      },
+      ids.length > 1 ? "Updated labels" : "Updated label",
+      { fitToContent: true },
+    );
+  };
+
   const applyStylePreset = (presetId: StylePresetId) => {
     const tool = activeStyleTool();
 
@@ -2020,6 +2358,31 @@ export const ImageEditor = () => {
       return;
     }
 
+    if (
+      currentProject &&
+      annotation &&
+      isShapeTextAnnotation(annotation) &&
+      annotation.text &&
+      annotation.text.text.trim().length === 0
+    ) {
+      setHasPendingInlineEdit(false);
+      setInlineEditingId(undefined);
+      setInlineEditOriginalAnnotations(undefined);
+      commitProject(
+        {
+          ...currentProject,
+          annotations: currentProject.annotations.map((candidate) =>
+            candidate.id === annotation.id && isShapeTextAnnotation(candidate)
+              ? { ...candidate, text: undefined }
+              : candidate,
+          ),
+        },
+        "Removed empty label",
+        { fitToContent: true },
+      );
+      return;
+    }
+
     if (!hasPendingInlineEdit()) {
       setInlineEditingId(undefined);
       setInlineEditOriginalAnnotations(undefined);
@@ -2084,11 +2447,46 @@ export const ImageEditor = () => {
     const currentProject = project();
     const annotation = currentProject?.annotations.find((candidate) => candidate.id === id);
 
-    if (!currentProject || (annotation?.type !== "text" && annotation?.type !== "step")) {
+    if (
+      !currentProject ||
+      !annotation ||
+      !(
+        annotation.type === "text" ||
+        annotation.type === "step" ||
+        annotation.type === "arrow" ||
+        annotation.type === "rectangle" ||
+        annotation.type === "ellipse" ||
+        annotation.type === "pixelate" ||
+        annotation.type === "erase"
+      )
+    ) {
       return;
     }
 
+    const nextAnnotations =
+      annotation.type === "arrow" ||
+      annotation.type === "rectangle" ||
+      annotation.type === "ellipse" ||
+      annotation.type === "pixelate" ||
+      annotation.type === "erase"
+        ? currentProject.annotations.map((candidate) =>
+            candidate.id === id && isShapeTextAnnotation(candidate) && !candidate.text
+              ? {
+                  ...candidate,
+                  text: createAttachedTextForAnnotation(candidate, settings()),
+                }
+              : candidate,
+          )
+        : currentProject.annotations;
+
     batch(() => {
+      if (nextAnnotations !== currentProject.annotations) {
+        setProject({
+          ...currentProject,
+          annotations: nextAnnotations,
+          updatedAt: Date.now(),
+        });
+      }
       setSelectedId(id);
       setInlineEditingId(id);
       setInlineEditOriginalAnnotations(
@@ -2548,7 +2946,11 @@ export const ImageEditor = () => {
 
     const hit = findHitAnnotation(currentProject.annotations, point);
 
-    if (hit?.type === "text" || hit?.type === "step") {
+    if (
+      hit?.type === "text" ||
+      hit?.type === "step" ||
+      (hit !== undefined && isShapeTextAnnotation(hit))
+    ) {
       startInlineEditFor(hit.id);
     }
   };
@@ -3332,6 +3734,9 @@ export const ImageEditor = () => {
         isSaving={isSaving()}
         isHistoryOpen={isHistoryOpen()}
         isBeforeAfterMode={isBeforeAfterMode()}
+        selectedCount={selectedIds().length}
+        snapMode={snapMode()}
+        measureMode={measureMode()}
         zoom={zoom()}
         onToolChange={handleToolChange}
         onToggleHistory={() => setIsHistoryOpen((value) => !value)}
@@ -3344,6 +3749,10 @@ export const ImageEditor = () => {
         onZoomReset={resetZoom}
         onExpandCanvas={expandCanvas}
         onTrimCanvas={trimCanvas}
+        onSelectionView={requestSelectionView}
+        onSmartAdjustSelection={() => void smartAdjustSelection()}
+        onSnapModeChange={handleSnapModeChange}
+        onMeasureModeChange={handleMeasureModeChange}
         onToggleBeforeAfterMode={() => {
           const nextMode = !isBeforeAfterMode();
           setIsBeforeAfterMode(nextMode);
@@ -3397,7 +3806,6 @@ export const ImageEditor = () => {
           selectionViewAction={selectionViewAction()}
           inlineEditingAnnotation={visibleInlineEditingAnnotation()}
           activeTool={activeTool()}
-          snapMode={snapMode()}
           measureMode={measureMode()}
           measureAnchor={activeMeasureContext().anchor}
           measureAxis={activeMeasureContext().axis}
@@ -3413,29 +3821,14 @@ export const ImageEditor = () => {
           onFiles={(files) => void importFiles(files, "Dropped image")}
           onZoomChange={handleZoomChange}
           onSettingsChange={handleSettingsChange}
+          onAttachedTextChange={handleAttachedTextChange}
           onStylePreset={applyStylePreset}
           onCustomColorChange={addCustomColor}
           onMakeCurrentStyleDefault={makeCurrentStyleDefault}
           onCopyStyle={copySelectedStyle}
           onPasteStyle={pasteCopiedStyle}
-          onMeasureModeChange={handleMeasureModeChange}
-          onSnapModeChange={(mode) => {
-            setSnapMode(mode);
-            setSnapGuides([]);
-            setStatus(
-              mode === "off"
-                ? "Object snapping off."
-                : mode === "both"
-                  ? "Object snapping on for X and Y."
-                  : mode === "horizontal"
-                    ? "Object snapping on for X positions."
-                    : "Object snapping on for Y positions.",
-            );
-          }}
           onAlignSelection={alignSelection}
           onDistributeSelection={distributeSelection}
-          onSmartAdjustSelection={() => void smartAdjustSelection()}
-          onSelectionView={requestSelectionView}
           onStartInlineEdit={startInlineEdit}
           onInlineEditChange={(id, value) =>
             updateAnnotationLive(id, (annotation) =>
@@ -3443,6 +3836,14 @@ export const ImageEditor = () => {
                 ? { ...annotation, text: value }
                 : annotation.type === "step"
                   ? { ...annotation, label: value }
+                  : isShapeTextAnnotation(annotation)
+                    ? {
+                        ...annotation,
+                        text: {
+                          ...(annotation.text ?? createAttachedTextForAnnotation(annotation, settings())),
+                          text: value,
+                        },
+                      }
                   : annotation,
             )
           }
@@ -3509,7 +3910,7 @@ export const ImageEditor = () => {
           >
             <Box fontWeight="semibold" mb="3">Keyboard shortcuts</Box>
             <Flex gap="2" direction="column" textStyle="sm">
-              <ShortcutRow keys="V A R O P H T S M X C" label="Choose tools" />
+              <ShortcutRow keys="V L A R O P H T S M D X C" label="Choose tools" />
               <ShortcutRow keys="+ / -" label="Zoom in or out" />
               <ShortcutRow keys="Cmd/Ctrl wheel or pinch" label="Zoom around cursor" />
               <ShortcutRow keys="Two-finger pan / Middle drag / Space drag" label="Pan viewport" />
@@ -3933,17 +4334,18 @@ const createDraftAnnotation = (
   const createdAt = Date.now();
 
   switch (tool) {
+    case "line":
     case "arrow":
       return {
         id,
-        type: tool,
+        type: "arrow",
         createdAt,
         opacity: settings.opacity,
         start: point,
         end: point,
         color: settings.color,
         strokeWidth: settings.strokeWidth,
-        arrowStyle: settings.arrowStyle,
+        arrowStyle: tool === "line" ? "line-only" : settings.arrowStyle,
       };
     case "measure": {
       const start = options.measureInfo?.point ?? point;
@@ -3964,6 +4366,7 @@ const createDraftAnnotation = (
     }
     case "rectangle":
     case "ellipse":
+    case "erase":
     case "pixelate":
       return {
         id,
@@ -4000,8 +4403,8 @@ const createDraftAnnotation = (
         height: 0,
       };
     case "select":
-    case "text":
     case "step":
+    case "text":
       return undefined;
   }
 };
@@ -4027,6 +4430,7 @@ const updateDraft = (
     case "rectangle":
     case "ellipse":
     case "pixelate":
+    case "erase":
     case "crop": {
       const bounds = getGestureRect(start, point, options);
 
@@ -4177,6 +4581,65 @@ const createStepAnnotation = (
   };
 };
 
+const isShapeTextAnnotation = (
+  annotation: ImageAnnotation,
+): annotation is ArrowAnnotation | BoxAnnotation =>
+  annotation.type === "arrow" ||
+  annotation.type === "rectangle" ||
+  annotation.type === "ellipse" ||
+  annotation.type === "pixelate" ||
+  annotation.type === "erase";
+
+const createAttachedTextForAnnotation = (
+  annotation: ArrowAnnotation | BoxAnnotation,
+  settings: EditorSettings,
+): AttachedText => {
+  const bounds = getDefaultAttachedTextBounds(annotation, settings);
+
+  return {
+    text: "",
+    x: bounds.x,
+    y: bounds.y,
+    width: bounds.width,
+    height: bounds.height,
+    color: settings.color,
+    backgroundColor: "rgba(255, 255, 255, 0)",
+    fontSize: settings.fontSize,
+    textStyle: "none",
+    textAlign: "center",
+    verticalAlign: "middle",
+  };
+};
+
+const getDefaultAttachedTextBounds = (
+  annotation: ArrowAnnotation | BoxAnnotation,
+  settings: EditorSettings,
+): Bounds => {
+  if (annotation.type === "arrow") {
+    const minX = Math.min(annotation.start.x, annotation.end.x);
+    const minY = Math.min(annotation.start.y, annotation.end.y);
+    const width = Math.max(96, Math.abs(annotation.end.x - annotation.start.x));
+    const height = Math.max(settings.fontSize * 1.6, Math.abs(annotation.end.y - annotation.start.y));
+
+    return {
+      x: minX,
+      y: minY - height - Math.max(4, settings.strokeWidth),
+      width,
+      height,
+    };
+  }
+
+  const bounds = normalizeRect(annotation.x, annotation.y, annotation.width, annotation.height);
+  const inset = Math.max(6, annotation.strokeWidth * 1.5);
+
+  return {
+    x: bounds.x + inset,
+    y: bounds.y + inset,
+    width: Math.max(24, bounds.width - inset * 2),
+    height: Math.max(settings.fontSize * 1.6, bounds.height - inset * 2),
+  };
+};
+
 const isUsableDraft = (draft: EditorDraft) => {
   switch (draft.type) {
     case "arrow":
@@ -4186,6 +4649,7 @@ const isUsableDraft = (draft: EditorDraft) => {
     case "rectangle":
     case "ellipse":
     case "pixelate":
+    case "erase":
     case "crop": {
       const bounds = normalizeRect(draft.x, draft.y, draft.width, draft.height);
       return bounds.width >= 8 && bounds.height >= 8;
@@ -4306,6 +4770,8 @@ const annotationTypeLabel = (annotation: ImageAnnotation | EditorDraft) =>
     ? toolLabels.crop
     : annotation.type === "image"
       ? "Image"
+      : annotation.type === "arrow" && annotation.arrowStyle === "line-only"
+        ? toolLabels.line
       : toolLabels[annotation.type];
 
 const expandProjectToAnnotations = (
@@ -4537,6 +5003,7 @@ const applySettingsToAnnotation = (
       };
     case "rectangle":
     case "ellipse":
+    case "erase":
     case "pixelate":
       return {
         ...annotation,
@@ -4600,6 +5067,7 @@ const settingsFromAnnotation = (
       };
     case "rectangle":
     case "ellipse":
+    case "erase":
     case "pixelate":
       return {
         ...fallback,
@@ -4659,10 +5127,25 @@ const sameSettings = (first: EditorSettings, second: EditorSettings) =>
   first.textStyle === second.textStyle &&
   first.stepStyle === second.stepStyle;
 
+const sameAttachedText = (first: AttachedText, second: AttachedText) =>
+  first.text === second.text &&
+  first.x === second.x &&
+  first.y === second.y &&
+  first.width === second.width &&
+  first.height === second.height &&
+  first.color === second.color &&
+  first.backgroundColor === second.backgroundColor &&
+  first.fontSize === second.fontSize &&
+  first.textStyle === second.textStyle &&
+  first.textAlign === second.textAlign &&
+  first.verticalAlign === second.verticalAlign;
+
 const toolFromShortcut = (key: string): ImageEditorTool | undefined => {
   switch (key.toLowerCase()) {
     case "v":
       return "select";
+    case "l":
+      return "line";
     case "a":
       return "arrow";
     case "r":
@@ -4679,6 +5162,8 @@ const toolFromShortcut = (key: string): ImageEditorTool | undefined => {
       return "step";
     case "m":
       return "measure";
+    case "d":
+      return "erase";
     case "x":
       return "pixelate";
     case "c":
@@ -4764,7 +5249,7 @@ const intersects = (first: Bounds, second: Bounds) =>
   first.y < second.y + second.height &&
   first.y + first.height > second.y;
 
-const clampZoom = (zoom: number) => Math.max(0.1, Math.min(5, zoom));
+const clampZoom = (zoom: number) => Math.max(0.001, Math.min(5, zoom));
 
 const numericZoom = (zoom: ImageEditorZoom) => (zoom === "fit" ? 1 : zoom);
 

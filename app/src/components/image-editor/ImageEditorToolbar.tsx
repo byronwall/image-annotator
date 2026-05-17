@@ -5,14 +5,19 @@ import {
   Copy,
   Crop,
   Download,
+  Eraser,
+  Eye,
   Grid2X2,
   Highlighter,
   History,
   Keyboard,
   ListOrdered,
+  Magnet,
   Maximize2,
   Minimize2,
+  MoreHorizontal,
   MousePointer2,
+  Minus,
   PenLine,
   Redo2,
   Ruler,
@@ -26,18 +31,24 @@ import {
   ZoomOut,
 } from "lucide-solid";
 import { For, type JSX } from "solid-js";
+import { Portal } from "solid-js/web";
 import { Box, HStack } from "styled-system/jsx";
 import { Button } from "~/components/ui/button";
 import { IconButton } from "~/components/ui/icon-button";
+import * as Menu from "~/components/ui/menu";
 import { Tooltip } from "~/components/ui/tooltip";
 import {
   type ImageEditorZoom,
   type ImageEditorTool,
+  type MeasureMode,
   toolLabels,
 } from "./image-editor.types";
 
+type SnapMode = "off" | "both" | "horizontal" | "vertical";
+
 const primaryTools: ImageEditorTool[] = [
   "select",
+  "line",
   "arrow",
   "rectangle",
   "ellipse",
@@ -46,12 +57,14 @@ const primaryTools: ImageEditorTool[] = [
   "text",
   "step",
   "measure",
+  "erase",
   "pixelate",
   "crop",
 ];
 
 const toolShortcuts: Record<ImageEditorTool, string> = {
   select: "V",
+  line: "L",
   arrow: "A",
   rectangle: "R",
   ellipse: "O",
@@ -60,6 +73,7 @@ const toolShortcuts: Record<ImageEditorTool, string> = {
   text: "T",
   step: "S",
   measure: "M",
+  erase: "D",
   pixelate: "X",
   crop: "C",
 };
@@ -74,6 +88,9 @@ export type ImageEditorToolbarProps = {
   isSaving: boolean;
   isHistoryOpen: boolean;
   isBeforeAfterMode: boolean;
+  selectedCount: number;
+  snapMode: SnapMode;
+  measureMode: MeasureMode;
   zoom: ImageEditorZoom;
   onToolChange: (tool: ImageEditorTool) => void;
   onToggleHistory: () => void;
@@ -86,6 +103,10 @@ export type ImageEditorToolbarProps = {
   onZoomReset: () => void;
   onExpandCanvas: () => void;
   onTrimCanvas: () => void;
+  onSelectionView: (kind: "zoom" | "fit-region" | "top-left" | "bottom-right") => void;
+  onSmartAdjustSelection: () => void;
+  onSnapModeChange: (mode: SnapMode) => void;
+  onMeasureModeChange: (mode: MeasureMode) => void;
   onToggleBeforeAfterMode: () => void;
   onPasteMeasureTestImage: () => void;
   onSave: () => void;
@@ -97,6 +118,15 @@ export type ImageEditorToolbarProps = {
 export const ImageEditorToolbar = (props: ImageEditorToolbarProps) => {
   const zoomLabel = () =>
     props.zoom === "fit" ? "Fit" : `${Math.round(props.zoom * 100)}%`;
+  const hasSelection = () => props.selectedCount > 0;
+  const snapLabel = () =>
+    props.snapMode === "off"
+      ? "Snap off"
+      : props.snapMode === "both"
+        ? "Snap XY"
+        : props.snapMode === "horizontal"
+          ? "Snap X"
+          : "Snap Y";
 
   return (
     <HStack
@@ -109,10 +139,10 @@ export const ImageEditorToolbar = (props: ImageEditorToolbarProps) => {
       borderColor="border"
       bg="bg.default"
       flexShrink="0"
-      flexWrap={{ base: "wrap", lg: "nowrap" }}
-      overflowX="auto"
+      flexWrap="nowrap"
+      overflow="hidden"
     >
-      <HStack gap="2" minW="max-content" flex="0 0 auto" flexWrap="nowrap">
+      <HStack gap="2" minW="0" flex="1 1 auto" flexWrap="nowrap">
         <HStack gap="2" mr="1">
           <Tooltip content={props.isHistoryOpen ? "Hide sidebar" : "Show sidebar"}>
             <IconButton
@@ -129,7 +159,7 @@ export const ImageEditorToolbar = (props: ImageEditorToolbarProps) => {
             Image Annotator
           </Box>
         </HStack>
-        <HStack gap="1" flexWrap="nowrap">
+        <HStack gap="0.5" flexWrap="nowrap" overflowX="auto" minW="0">
           <For each={primaryTools}>
             {(tool) => (
               <Tooltip content={`${toolLabels[tool]} (${toolShortcuts[tool]})`} openDelay={250}>
@@ -149,52 +179,7 @@ export const ImageEditorToolbar = (props: ImageEditorToolbarProps) => {
         </HStack>
       </HStack>
 
-      <HStack gap="2" flexWrap="nowrap" justifyContent="end" flexShrink="0" ml="auto">
-        <HStack gap="1" flexWrap="nowrap">
-          <Tooltip content="Zoom out (-)">
-            <IconButton
-              aria-label="Zoom out"
-              size="sm"
-              variant="surface"
-              disabled={!props.hasProject}
-              onClick={props.onZoomOut}
-            >
-              <ZoomOut />
-            </IconButton>
-          </Tooltip>
-          <Tooltip content="Fit to screen (F)">
-            <IconButton
-              aria-label="Fit to screen"
-              size="sm"
-              variant={props.zoom === "fit" ? "solid" : "surface"}
-              colorPalette={props.zoom === "fit" ? "blue" : "gray"}
-              disabled={!props.hasProject}
-              onClick={props.onZoomFit}
-            >
-              <Maximize2 />
-            </IconButton>
-          </Tooltip>
-          <Button
-            size="sm"
-            variant="surface"
-            disabled={!props.hasProject}
-            minW="16"
-            onClick={props.onZoomReset}
-          >
-            {zoomLabel()}
-          </Button>
-          <Tooltip content="Zoom in (+)">
-            <IconButton
-              aria-label="Zoom in"
-              size="sm"
-              variant="surface"
-              disabled={!props.hasProject}
-              onClick={props.onZoomIn}
-            >
-              <ZoomIn />
-            </IconButton>
-          </Tooltip>
-        </HStack>
+      <HStack gap="1" flexWrap="nowrap" justifyContent="end" flex="0 0 auto" ml="auto">
         <Tooltip content="Undo">
           <IconButton
             aria-label="Undo"
@@ -217,58 +202,149 @@ export const ImageEditorToolbar = (props: ImageEditorToolbarProps) => {
             <Redo2 />
           </IconButton>
         </Tooltip>
-        <Tooltip content="Keyboard shortcuts (Shift ?)">
-          <IconButton
-            aria-label="Keyboard shortcuts"
-            size="sm"
-            variant="surface"
-            onClick={props.onShowShortcuts}
-          >
-            <Keyboard />
-          </IconButton>
-        </Tooltip>
-        <Tooltip content="Expand canvas">
-          <IconButton
-            aria-label="Expand canvas"
-            size="sm"
-            variant="surface"
-            disabled={!props.hasProject}
-            onClick={props.onExpandCanvas}
-          >
-            <Maximize2 />
-          </IconButton>
-        </Tooltip>
-        <Tooltip content="Trim canvas to content">
-          <IconButton
-            aria-label="Trim canvas to content"
-            size="sm"
-            variant="surface"
-            disabled={!props.hasProject}
-            onClick={props.onTrimCanvas}
-          >
-            <Minimize2 />
-          </IconButton>
-        </Tooltip>
-        <Tooltip content="Frame next pasted image as before/after">
-          <IconButton
-            aria-label="Frame next pasted image as before/after"
-            size="sm"
-            variant={props.isBeforeAfterMode ? "solid" : "surface"}
-            colorPalette={props.isBeforeAfterMode ? "blue" : "gray"}
-            disabled={!props.hasProject}
-            onClick={props.onToggleBeforeAfterMode}
-          >
-            <Columns2 />
-          </IconButton>
-        </Tooltip>
+        <Menu.Root positioning={{ placement: "bottom-end" }} size="sm">
+          <Menu.Trigger
+            asChild={(triggerProps) => (
+            <Button
+              {...triggerProps()}
+              size="sm"
+              variant="surface"
+              disabled={!props.hasProject}
+              minW="18"
+            >
+              <Eye />
+              View
+            </Button>
+            )}
+          />
+          <Portal>
+            <Menu.Positioner>
+              <Menu.Content>
+                <Menu.Item value="zoom-out" onClick={props.onZoomOut}>
+                  <ZoomOut />
+                  <Menu.ItemText>Zoom out</Menu.ItemText>
+                </Menu.Item>
+                <Menu.Item value="fit-screen" onClick={props.onZoomFit}>
+                  <Maximize2 />
+                  <Menu.ItemText>Fit to screen</Menu.ItemText>
+                </Menu.Item>
+                <Menu.Item value="reset-zoom" onClick={props.onZoomReset}>
+                  <Menu.ItemText>Reset to {zoomLabel()}</Menu.ItemText>
+                </Menu.Item>
+                <Menu.Item value="zoom-in" onClick={props.onZoomIn}>
+                  <ZoomIn />
+                  <Menu.ItemText>Zoom in</Menu.ItemText>
+                </Menu.Item>
+                <Menu.Separator />
+                <Menu.Item
+                  value="zoom-selection"
+                  disabled={!hasSelection()}
+                  onClick={() => props.onSelectionView("zoom")}
+                >
+                  <Menu.ItemText>Zoom to selection</Menu.ItemText>
+                </Menu.Item>
+                <Menu.Item
+                  value="fit-region"
+                  disabled={!hasSelection()}
+                  onClick={() => props.onSelectionView("fit-region")}
+                >
+                  <Menu.ItemText>Fit selected region</Menu.ItemText>
+                </Menu.Item>
+                <Menu.Item
+                  value="top-left"
+                  disabled={!hasSelection()}
+                  onClick={() => props.onSelectionView("top-left")}
+                >
+                  <Menu.ItemText>Focus selection top-left</Menu.ItemText>
+                </Menu.Item>
+                <Menu.Item
+                  value="bottom-right"
+                  disabled={!hasSelection()}
+                  onClick={() => props.onSelectionView("bottom-right")}
+                >
+                  <Menu.ItemText>Focus selection bottom-right</Menu.ItemText>
+                </Menu.Item>
+                <Menu.Separator />
+                <Menu.Item
+                  value="smart-fit"
+                  disabled={!hasSelection()}
+                  onClick={props.onSmartAdjustSelection}
+                >
+                  <Menu.ItemText>Smart-fit selection</Menu.ItemText>
+                </Menu.Item>
+                <Menu.Separator />
+                <Menu.Item value="expand-canvas" onClick={props.onExpandCanvas}>
+                  <Maximize2 />
+                  <Menu.ItemText>Expand canvas</Menu.ItemText>
+                </Menu.Item>
+                <Menu.Item value="trim-canvas" onClick={props.onTrimCanvas}>
+                  <Minimize2 />
+                  <Menu.ItemText>Trim to content</Menu.ItemText>
+                </Menu.Item>
+              </Menu.Content>
+            </Menu.Positioner>
+          </Portal>
+        </Menu.Root>
+        <Menu.Root positioning={{ placement: "bottom-end" }} size="sm">
+          <Menu.Trigger
+            asChild={(triggerProps) => (
+              <Button
+                {...triggerProps()}
+                size="sm"
+                variant="surface"
+                minW="22"
+              >
+                <Magnet />
+                {snapLabel()}
+              </Button>
+            )}
+          />
+          <Portal>
+            <Menu.Positioner>
+              <Menu.Content>
+                <Menu.ItemGroup>
+                  <Menu.ItemGroupLabel>Snapping</Menu.ItemGroupLabel>
+                  <SnapMenuItem active={props.snapMode === "off"} value="snap-off" onClick={() => props.onSnapModeChange("off")}>
+                    Snap off
+                  </SnapMenuItem>
+                  <SnapMenuItem active={props.snapMode === "horizontal"} value="snap-x" onClick={() => props.onSnapModeChange("horizontal")}>
+                    X only
+                  </SnapMenuItem>
+                  <SnapMenuItem active={props.snapMode === "vertical"} value="snap-y" onClick={() => props.onSnapModeChange("vertical")}>
+                    Y only
+                  </SnapMenuItem>
+                  <SnapMenuItem active={props.snapMode === "both"} value="snap-xy" onClick={() => props.onSnapModeChange("both")}>
+                    X and Y
+                  </SnapMenuItem>
+                </Menu.ItemGroup>
+                <Menu.Separator />
+                <Menu.ItemGroup>
+                  <Menu.ItemGroupLabel>Measurement</Menu.ItemGroupLabel>
+                  <SnapMenuItem active={props.measureMode === "edge"} value="measure-edge" onClick={() => props.onMeasureModeChange("edge")}>
+                    Edge
+                  </SnapMenuItem>
+                  <SnapMenuItem active={props.measureMode === "point"} value="measure-point" onClick={() => props.onMeasureModeChange("point")}>
+                    Point
+                  </SnapMenuItem>
+                </Menu.ItemGroup>
+              </Menu.Content>
+            </Menu.Positioner>
+          </Portal>
+        </Menu.Root>
         <Button size="sm" variant="surface" onClick={props.onChooseFile}>
           <Upload />
           Import
         </Button>
-        <Button size="sm" variant="surface" onClick={props.onPasteMeasureTestImage}>
-          <ScanLine />
-          Test image
-        </Button>
+        <Tooltip content="Load sample image">
+          <IconButton
+            aria-label="Load sample image"
+            size="sm"
+            variant="surface"
+            onClick={props.onPasteMeasureTestImage}
+          >
+            <ScanLine />
+          </IconButton>
+        </Tooltip>
         <Button
           size="sm"
           variant="surface"
@@ -279,16 +355,61 @@ export const ImageEditorToolbar = (props: ImageEditorToolbarProps) => {
           <Save />
           Save
         </Button>
-        <Button
-          size="sm"
-          variant="surface"
-          disabled={!props.hasProject}
-          loading={props.isCopying}
-          onClick={props.onCopy}
-        >
+        <Tooltip content="Copy PNG">
+          <IconButton
+            aria-label="Copy PNG"
+            size="sm"
+            variant="surface"
+            disabled={!props.hasProject}
+            loading={props.isCopying}
+            onClick={props.onCopy}
+          >
           <Copy />
-          Copy PNG
-        </Button>
+        </IconButton>
+      </Tooltip>
+        <Tooltip content="Keyboard shortcuts (Shift ?)">
+          <IconButton
+            aria-label="Keyboard shortcuts"
+            size="sm"
+            variant="surface"
+            onClick={props.onShowShortcuts}
+          >
+            <Keyboard />
+          </IconButton>
+        </Tooltip>
+        <Menu.Root positioning={{ placement: "bottom-end" }} size="sm">
+          <Menu.Trigger
+            asChild={(triggerProps) => (
+              <IconButton
+                {...triggerProps()}
+                aria-label="More actions"
+                size="sm"
+                variant="surface"
+              >
+                <MoreHorizontal />
+              </IconButton>
+            )}
+          />
+          <Portal>
+            <Menu.Positioner>
+              <Menu.Content>
+                <Menu.ItemGroup>
+                  <Menu.ItemGroupLabel>Canvas</Menu.ItemGroupLabel>
+                  <Menu.Item
+                    value="before-after"
+                    disabled={!props.hasProject}
+                    onClick={props.onToggleBeforeAfterMode}
+                  >
+                    <Columns2 />
+                    <Menu.ItemText>
+                      {props.isBeforeAfterMode ? "Before/after enabled" : "Before/after paste"}
+                    </Menu.ItemText>
+                  </Menu.Item>
+                </Menu.ItemGroup>
+              </Menu.Content>
+            </Menu.Positioner>
+          </Portal>
+        </Menu.Root>
         <Button
           size="sm"
           colorPalette="blue"
@@ -297,17 +418,33 @@ export const ImageEditorToolbar = (props: ImageEditorToolbarProps) => {
           onClick={props.onExport}
         >
           <Download />
-          Export PNG
+          Export
         </Button>
       </HStack>
     </HStack>
   );
 };
 
+const SnapMenuItem = (props: {
+  active: boolean;
+  value: string;
+  onClick: () => void;
+  children: JSX.Element;
+}) => (
+  <Menu.Item value={props.value} onClick={props.onClick}>
+    <Box as="span" aria-hidden="true" width="4" color="blue.9">
+      {props.active ? "*" : ""}
+    </Box>
+    <Menu.ItemText>{props.children}</Menu.ItemText>
+  </Menu.Item>
+);
+
 const renderToolIcon = (tool: ImageEditorTool): JSX.Element => {
   switch (tool) {
     case "select":
       return <MousePointer2 />;
+    case "line":
+      return <Minus />;
     case "arrow":
       return <ArrowUpRight />;
     case "rectangle":
@@ -324,6 +461,8 @@ const renderToolIcon = (tool: ImageEditorTool): JSX.Element => {
       return <ListOrdered />;
     case "measure":
       return <Ruler />;
+    case "erase":
+      return <Eraser />;
     case "pixelate":
       return <Grid2X2 />;
     case "crop":

@@ -1,5 +1,6 @@
 import {
   type ArrowAnnotation,
+  type AttachedText,
   type BoxAnnotation,
   type CropDraft,
   type EditorDraft,
@@ -38,6 +39,8 @@ const imageLayerCache = new Map<string, HTMLImageElement>();
 const textAnnotationFontFamily =
   'ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
 const textAnnotationFontWeight = 700;
+const autoTextMinColumns = 1;
+const autoTextMaxColumns = 20;
 let textMeasurementContext: CanvasRenderingContext2D | undefined;
 
 export const normalizeRect = (
@@ -87,7 +90,6 @@ export const renderImageEditorCanvas = (
   hoveredId: string | undefined = undefined,
   options: {
     backgroundColor?: string;
-    measureDeviceScale?: number;
     measureGuide?: MeasurePointerInfo;
     snapGuides?: SnapGuide[];
     selectionMarquee?: Bounds;
@@ -121,14 +123,14 @@ export const renderImageEditorCanvas = (
       continue;
     }
 
-    drawAnnotation(context, annotation, options);
+    drawAnnotation(context, annotation);
   }
 
   if (draft) {
     if (draft.type === "crop") {
       drawCropDraft(context, draft);
     } else {
-      drawAnnotation(context, draft, options);
+      drawAnnotation(context, draft);
     }
   }
 
@@ -289,13 +291,68 @@ export const getTextRenderColors = (annotation: TextAnnotation) => {
   }
 };
 
+export const getTextRenderLayout = (
+  annotation: TextAnnotation,
+  measureLine: (line: string) => number = (line) => measureTextLine(annotation, line),
+) => {
+  const metrics = getTextRenderMetrics(annotation);
+  const horizontalInsets =
+    metrics.paddingX * 2 + metrics.leadingBadgeSize + metrics.leadingGap;
+  const explicitContentWidth =
+    annotation.width !== undefined
+      ? Math.max(1, annotation.width - horizontalInsets)
+      : undefined;
+  const autoContentWidth =
+    explicitContentWidth === undefined
+      ? getAutoTextContentWidth(annotation.text, annotation, measureLine)
+      : undefined;
+  const contentWidth = explicitContentWidth ?? autoContentWidth?.width ?? 1;
+  const lines = getTextLines(annotation.text, annotation, contentWidth, measureLine);
+  const lineWidths = lines.map((line) => measureLine(line));
+  const width =
+    annotation.width ?? contentWidth + horizontalInsets;
+  const height =
+    annotation.height ?? metrics.lineHeight * lines.length + metrics.paddingY * 2;
+  const textAlign = annotation.textAlign ?? "left";
+  const verticalAlign = annotation.verticalAlign ?? "top";
+  const textAreaWidth = Math.max(
+    1,
+    width - metrics.paddingX * 2 - metrics.leadingBadgeSize - metrics.leadingGap,
+  );
+  const textAreaHeight = Math.max(1, height - metrics.paddingY * 2);
+  const textBlockHeight = metrics.lineHeight * lines.length;
+  const textStartX = metrics.paddingX + metrics.leadingBadgeSize + metrics.leadingGap;
+  const textStartY =
+    metrics.paddingY +
+    getAlignedOffset(textAreaHeight, textBlockHeight, verticalAlign);
+  const lineOffsetsX = lineWidths.map((lineWidth) =>
+    getAlignedOffset(textAreaWidth, lineWidth, textAlign),
+  );
+
+  return {
+    metrics,
+    lines,
+    width,
+    height,
+    textAreaWidth,
+    textAreaHeight,
+    textBlockHeight,
+    textStartX,
+    textStartY,
+    lineOffsetsX,
+    isAutoWidthCapped: autoContentWidth?.isCapped ?? false,
+  };
+};
+
 export const getAnnotationBounds = (annotation: ImageAnnotation): Bounds => {
-  switch (annotation.type) {
+  const bounds = (() => {
+    switch (annotation.type) {
     case "arrow":
       return getArrowBounds(annotation);
     case "rectangle":
     case "ellipse":
     case "pixelate":
+    case "erase":
       return expandBounds(
         normalizeRect(annotation.x, annotation.y, annotation.width, annotation.height),
         annotation.type === "rectangle" && annotation.rectangleStyle === "label-badge"
@@ -313,7 +370,38 @@ export const getAnnotationBounds = (annotation: ImageAnnotation): Bounds => {
       return getMeasureBounds(annotation);
     case "image":
       return normalizeRect(annotation.x, annotation.y, annotation.width, annotation.height);
+    }
+  })();
+  const textBounds = getAnnotationTextBounds(annotation);
+
+  return textBounds ? unionBounds(bounds, textBounds) : bounds;
+};
+
+export const getAnnotationTextBounds = (
+  annotation: ImageAnnotation,
+): Bounds | undefined => {
+  if (
+    annotation.type !== "arrow" &&
+    annotation.type !== "rectangle" &&
+    annotation.type !== "ellipse" &&
+    annotation.type !== "pixelate" &&
+    annotation.type !== "erase"
+  ) {
+    return undefined;
   }
+
+  const text = annotation.text;
+
+  if (!text) {
+    return undefined;
+  }
+
+  return {
+    x: text.x,
+    y: text.y,
+    width: text.width,
+    height: text.height,
+  };
 };
 
 export const getAnnotationUnionBounds = (
@@ -353,6 +441,20 @@ export const getAnnotationUnionBounds = (
   };
 };
 
+const unionBounds = (first: Bounds, second: Bounds): Bounds => {
+  const minX = Math.min(first.x, second.x);
+  const minY = Math.min(first.y, second.y);
+  const maxX = Math.max(first.x + first.width, second.x + second.width);
+  const maxY = Math.max(first.y + first.height, second.y + second.height);
+
+  return {
+    x: minX,
+    y: minY,
+    width: maxX - minX,
+    height: maxY - minY,
+  };
+};
+
 export const hitTestAnnotation = (
   annotation: ImageAnnotation,
   point: Point,
@@ -381,14 +483,21 @@ export const moveAnnotation = (
         ...annotation,
         start: movePoint(annotation.start, deltaX, deltaY),
         end: movePoint(annotation.end, deltaX, deltaY),
+        text: annotation.text
+          ? moveAttachedText(annotation.text, deltaX, deltaY)
+          : undefined,
       };
     case "rectangle":
     case "ellipse":
     case "pixelate":
+    case "erase":
       return {
         ...annotation,
         x: annotation.x + deltaX,
         y: annotation.y + deltaY,
+        text: annotation.text
+          ? moveAttachedText(annotation.text, deltaX, deltaY)
+          : undefined,
       };
     case "pen":
     case "highlighter":
@@ -451,10 +560,12 @@ export const transformAnnotationToBounds = (
         ...annotation,
         start: mapPoint(annotation.start),
         end: mapPoint(annotation.end),
+        text: annotation.text ? transformAttachedText(annotation.text, mapBounds, scale) : undefined,
       };
     case "rectangle":
     case "ellipse":
-    case "pixelate": {
+    case "pixelate":
+    case "erase": {
       const nextBounds = mapBounds(
         normalizeRect(annotation.x, annotation.y, annotation.width, annotation.height),
       );
@@ -465,6 +576,7 @@ export const transformAnnotationToBounds = (
         y: nextBounds.y,
         width: Math.max(4, nextBounds.width),
         height: Math.max(4, nextBounds.height),
+        text: annotation.text ? transformAttachedText(annotation.text, mapBounds, scale) : undefined,
       };
     }
     case "pen":
@@ -519,6 +631,7 @@ export const canResizeAnnotation = (annotation: ImageAnnotation): boolean =>
   annotation.type === "rectangle" ||
   annotation.type === "ellipse" ||
   annotation.type === "pixelate" ||
+  annotation.type === "erase" ||
   annotation.type === "image";
 
 export const getResizeHandleAt = (
@@ -562,6 +675,7 @@ export const resizeAnnotation = (
     annotation.type !== "rectangle" &&
     annotation.type !== "ellipse" &&
     annotation.type !== "pixelate" &&
+    annotation.type !== "erase" &&
     annotation.type !== "image"
   ) {
     return annotation;
@@ -587,7 +701,6 @@ export const resizeBounds = (
 const drawAnnotation = (
   context: CanvasRenderingContext2D,
   annotation: ImageAnnotation,
-  options: { measureDeviceScale?: number } = {},
 ) => {
   switch (annotation.type) {
     case "arrow":
@@ -602,6 +715,9 @@ const drawAnnotation = (
     case "pixelate":
       drawPixelate(context, annotation);
       break;
+    case "erase":
+      drawErase(context, annotation);
+      break;
     case "pen":
     case "highlighter":
       drawPath(context, annotation);
@@ -613,7 +729,7 @@ const drawAnnotation = (
       drawStep(context, annotation);
       break;
     case "measure":
-      drawMeasure(context, annotation, options.measureDeviceScale);
+      drawMeasure(context, annotation);
       break;
     case "image":
       drawImageLayer(context, annotation);
@@ -726,6 +842,10 @@ const drawArrow = (
   }
 
   context.restore();
+
+  if (annotation.text?.text.trim()) {
+    drawAttachedText(context, annotation.text, annotation.opacity);
+  }
 };
 
 const drawPolyline = (
@@ -873,6 +993,10 @@ const drawBox = (
   }
 
   context.restore();
+
+  if (annotation.text?.text.trim()) {
+    drawAttachedText(context, annotation.text, annotation.opacity);
+  }
 };
 
 const drawRectanglePath = (
@@ -975,6 +1099,41 @@ const drawEllipse = (
   context.fill();
   context.stroke();
   context.restore();
+
+  if (annotation.text?.text.trim()) {
+    drawAttachedText(context, annotation.text, annotation.opacity);
+  }
+};
+
+const drawErase = (
+  context: CanvasRenderingContext2D,
+  annotation: BoxAnnotation,
+) => {
+  const bounds = normalizeRect(
+    annotation.x,
+    annotation.y,
+    annotation.width,
+    annotation.height,
+  );
+
+  if (bounds.width < 1 || bounds.height < 1) {
+    return;
+  }
+
+  context.save();
+  context.globalAlpha = annotation.opacity;
+  context.fillStyle = sampleNearbyCommonColor(context, bounds);
+  context.fillRect(bounds.x, bounds.y, bounds.width, bounds.height);
+  context.globalAlpha = 0.5;
+  context.lineWidth = Math.max(1, annotation.strokeWidth / 2);
+  context.strokeStyle = annotation.strokeColor;
+  context.setLineDash([Math.max(4, annotation.strokeWidth * 1.5), Math.max(3, annotation.strokeWidth)]);
+  context.strokeRect(bounds.x, bounds.y, bounds.width, bounds.height);
+  context.restore();
+
+  if (annotation.text?.text.trim()) {
+    drawAttachedText(context, annotation.text, annotation.opacity);
+  }
 };
 
 const drawPixelate = (
@@ -1065,28 +1224,53 @@ const drawPath = (
   context.restore();
 };
 
+const drawAttachedText = (
+  context: CanvasRenderingContext2D,
+  text: AttachedText,
+  opacity: number,
+) => {
+  drawText(context, {
+    id: "attached-text",
+    type: "text",
+    createdAt: 0,
+    opacity,
+    x: text.x,
+    y: text.y,
+    text: text.text,
+    color: text.color,
+    backgroundColor: text.backgroundColor,
+    fontSize: text.fontSize,
+    textStyle: text.textStyle,
+    textAlign: text.textAlign,
+    verticalAlign: text.verticalAlign,
+    width: text.width,
+    height: text.height,
+  } as TextAnnotation);
+};
+
 const drawText = (
   context: CanvasRenderingContext2D,
   annotation: TextAnnotation,
 ) => {
-  const metrics = getTextRenderMetrics(annotation);
   const colors = getTextRenderColors(annotation);
-  const lines = getTextLines(annotation.text);
 
   context.save();
   context.globalAlpha = annotation.opacity;
   context.font = getTextAnnotationFont(annotation);
   context.textBaseline = "top";
-  const width =
-    Math.max(...lines.map((line) => context.measureText(line).width)) +
-    metrics.paddingX * 2 +
-    metrics.leadingBadgeSize +
-    metrics.leadingGap;
-  const height = metrics.lineHeight * lines.length + metrics.paddingY * 2;
+  const layout = getTextRenderLayout(annotation, (line) => context.measureText(line).width);
+  const metrics = layout.metrics;
 
   if ((annotation.textStyle ?? "pill") !== "none") {
     context.fillStyle = colors.backgroundColor;
-    drawRoundRect(context, annotation.x, annotation.y, width, height, metrics.borderRadius);
+    drawRoundRect(
+      context,
+      annotation.x,
+      annotation.y,
+      layout.width,
+      layout.height,
+      metrics.borderRadius,
+    );
     context.fill();
 
     if (colors.borderColor !== "rgba(255, 255, 255, 0)") {
@@ -1100,7 +1284,7 @@ const drawText = (
     const badgeRadius = metrics.leadingBadgeSize / 2;
     const badgeCenter = {
       x: annotation.x + metrics.paddingX + badgeRadius,
-      y: annotation.y + height / 2,
+      y: annotation.y + layout.height / 2,
     };
 
     context.fillStyle = annotation.color;
@@ -1119,15 +1303,103 @@ const drawText = (
 
   context.fillStyle = colors.color;
 
-  for (let index = 0; index < lines.length; index += 1) {
+  for (let index = 0; index < layout.lines.length; index += 1) {
+    const line = layout.lines[index] ?? "";
     context.fillText(
-      lines[index] ?? "",
-      annotation.x + metrics.paddingX + metrics.leadingBadgeSize + metrics.leadingGap,
-      annotation.y + metrics.paddingY + index * metrics.lineHeight,
+      line,
+      annotation.x + layout.textStartX + (layout.lineOffsetsX[index] ?? 0),
+      annotation.y + layout.textStartY + index * metrics.lineHeight,
     );
   }
 
   context.restore();
+};
+
+const getAlignedOffset = (
+  availableSize: number,
+  contentSize: number,
+  alignment: "left" | "center" | "right" | "top" | "middle" | "bottom",
+) => {
+  if (alignment === "center" || alignment === "middle") {
+    return Math.max(0, (availableSize - contentSize) / 2);
+  }
+
+  if (alignment === "right" || alignment === "bottom") {
+    return Math.max(0, availableSize - contentSize);
+  }
+
+  return 0;
+};
+
+const sampleNearbyCommonColor = (
+  context: CanvasRenderingContext2D,
+  bounds: Bounds,
+) => {
+  const sampleStep = Math.max(2, Math.round(Math.min(bounds.width, bounds.height, 48) / 8));
+  const margin = Math.max(4, sampleStep * 2);
+  const buckets = new Map<string, number>();
+  const addSample = (x: number, y: number) => {
+    const sampleX = Math.max(0, Math.min(context.canvas.width - 1, Math.round(x)));
+    const sampleY = Math.max(0, Math.min(context.canvas.height - 1, Math.round(y)));
+    const pixel = context.getImageData(sampleX, sampleY, 1, 1).data;
+    const key = [
+      Math.round((pixel[0] ?? 0) / 16) * 16,
+      Math.round((pixel[1] ?? 0) / 16) * 16,
+      Math.round((pixel[2] ?? 0) / 16) * 16,
+      Math.round((pixel[3] ?? 255) / 16) * 16,
+    ].join(",");
+    buckets.set(key, (buckets.get(key) ?? 0) + 1);
+  };
+
+  for (let x = bounds.x; x <= bounds.x + bounds.width; x += sampleStep) {
+    addSample(x, bounds.y - margin);
+    addSample(x, bounds.y + bounds.height + margin);
+  }
+
+  for (let y = bounds.y; y <= bounds.y + bounds.height; y += sampleStep) {
+    addSample(bounds.x - margin, y);
+    addSample(bounds.x + bounds.width + margin, y);
+  }
+
+  let bestKey = "255,255,255,255";
+  let bestCount = -1;
+
+  for (const [key, count] of buckets) {
+    if (count > bestCount) {
+      bestKey = key;
+      bestCount = count;
+    }
+  }
+
+  const [r, g, b, a] = bestKey.split(",").map((value) => Number(value));
+  return `rgba(${r ?? 255}, ${g ?? 255}, ${b ?? 255}, ${Math.min(1, (a ?? 255) / 255)})`;
+};
+
+const moveAttachedText = (
+  text: AttachedText,
+  deltaX: number,
+  deltaY: number,
+): AttachedText => ({
+  ...text,
+  x: text.x + deltaX,
+  y: text.y + deltaY,
+});
+
+const transformAttachedText = (
+  text: AttachedText,
+  mapBounds: (bounds: Bounds) => Bounds,
+  scale: number,
+): AttachedText => {
+  const bounds = mapBounds(text);
+
+  return {
+    ...text,
+    x: bounds.x,
+    y: bounds.y,
+    width: Math.max(8, bounds.width),
+    height: Math.max(8, bounds.height),
+    fontSize: Math.max(8, text.fontSize * scale),
+  };
 };
 
 const drawStep = (
@@ -1204,7 +1476,6 @@ const stepFontSize = (annotation: StepAnnotation) => {
 const drawMeasure = (
   context: CanvasRenderingContext2D,
   annotation: MeasureAnnotation,
-  deviceScale = 1,
 ) => {
   const length = getMeasureLength(annotation);
 
@@ -1223,10 +1494,7 @@ const drawMeasure = (
     y: Math.sin(angle + Math.PI / 2),
   };
   const tickSize = Math.max(10, annotation.strokeWidth * 3);
-  const label =
-    deviceScale > 1.01
-      ? `${Math.round(length)} px / ${Math.round(length * deviceScale)} spx`
-      : `${Math.round(length)} px`;
+  const label = `${Math.round(length)} px`;
   const midpoint = {
     x: (annotation.start.x + annotation.end.x) / 2,
     y: (annotation.start.y + annotation.end.y) / 2,
@@ -1847,20 +2115,13 @@ const getPathBounds = (annotation: PathAnnotation): Bounds => {
 };
 
 const getTextBounds = (annotation: TextAnnotation): Bounds => {
-  const metrics = getTextRenderMetrics(annotation);
-  const lines = getTextLines(annotation.text);
-  const width =
-    Math.max(...lines.map((line) => measureTextLine(annotation, line))) +
-    metrics.paddingX * 2 +
-    metrics.leadingBadgeSize +
-    metrics.leadingGap;
-  const height = metrics.lineHeight * lines.length + metrics.paddingY * 2;
+  const layout = getTextRenderLayout(annotation);
 
   return {
     x: annotation.x,
     y: annotation.y,
-    width,
-    height,
+    width: layout.width,
+    height: layout.height,
   };
 };
 
@@ -1916,9 +2177,123 @@ const movePoint = (point: Point, deltaX: number, deltaY: number): Point => ({
   y: point.y + deltaY,
 });
 
-const getTextLines = (text: string) => {
-  const lines = text.split(/\r?\n/);
-  return lines.length > 0 ? lines : [""];
+const getTextLines = (
+  text: string,
+  annotation?: Pick<TextAnnotation, "fontSize"> & Partial<Pick<TextAnnotation, "textStyle">>,
+  maxWidth?: number,
+  measureLine: (line: string) => number = annotation
+    ? (line) => measureTextLine(annotation, line)
+    : (line) => line.length,
+) => {
+  const sourceLines = text.split(/\r?\n/);
+  const lines = sourceLines.length > 0 ? sourceLines : [""];
+
+  if (!annotation || !maxWidth || maxWidth <= 0) {
+    return lines;
+  }
+
+  return lines.flatMap((line) => wrapTextLine(line, maxWidth, measureLine));
+};
+
+const wrapTextLine = (
+  line: string,
+  maxWidth: number,
+  measureLine: (line: string) => number,
+) => {
+  if (line.length === 0 || measureLine(line) <= maxWidth) {
+    return [line];
+  }
+
+  const wrapped: string[] = [];
+  let remaining = line;
+
+  while (remaining.length > 0) {
+    const fittingLength = getFittingTextPrefixLength(
+      remaining,
+      maxWidth,
+      measureLine,
+    );
+
+    if (fittingLength >= remaining.length) {
+      wrapped.push(remaining.trimEnd());
+      break;
+    }
+
+    const prefix = remaining.slice(0, fittingLength);
+    const whitespaceBreak = getLastWhitespaceBreakIndex(prefix);
+    const breakIndex = whitespaceBreak > 0 ? whitespaceBreak : fittingLength;
+    const wrappedLine = remaining.slice(0, breakIndex).trimEnd();
+
+    if (wrappedLine) {
+      wrapped.push(wrappedLine);
+    }
+
+    remaining = remaining.slice(breakIndex).trimStart();
+  }
+
+  return wrapped.length > 0 ? wrapped : [line];
+};
+
+const getAutoTextContentWidth = (
+  text: string,
+  annotation: Pick<TextAnnotation, "fontSize"> & Partial<Pick<TextAnnotation, "textStyle">>,
+  measureLine: (line: string) => number,
+) => {
+  const minWidth = getTextColumnWidth(annotation, measureLine, autoTextMinColumns);
+  const maxWidth = getTextColumnWidth(annotation, measureLine, autoTextMaxColumns);
+  const sourceLines = text.split(/\r?\n/);
+  const preferredWidth = Math.max(
+    minWidth,
+    ...sourceLines.map((line) => measureLine(line)),
+  );
+
+  return {
+    width: Math.max(1, Math.min(preferredWidth, maxWidth)),
+    isCapped: preferredWidth > maxWidth,
+  };
+};
+
+const getTextColumnWidth = (
+  annotation: Pick<TextAnnotation, "fontSize"> & Partial<Pick<TextAnnotation, "textStyle">>,
+  measureLine: (line: string) => number,
+  columns: number,
+) => {
+  const measuredWidth = measureLine("0".repeat(columns));
+
+  return measuredWidth > 0 ? measuredWidth : columns * annotation.fontSize * 0.62;
+};
+
+const getFittingTextPrefixLength = (
+  text: string,
+  maxWidth: number,
+  measureLine: (line: string) => number,
+) => {
+  let low = 0;
+  let high = text.length;
+
+  while (low < high) {
+    const mid = Math.ceil((low + high) / 2);
+
+    if (measureLine(text.slice(0, mid)) <= maxWidth) {
+      low = mid;
+    } else {
+      high = mid - 1;
+    }
+  }
+
+  return Math.max(1, low);
+};
+
+const getLastWhitespaceBreakIndex = (text: string) => {
+  let breakIndex = -1;
+
+  for (let index = 0; index < text.length; index += 1) {
+    if (/\s/.test(text[index] ?? "")) {
+      breakIndex = index + 1;
+    }
+  }
+
+  return breakIndex;
 };
 
 const getTextAnnotationFont = (

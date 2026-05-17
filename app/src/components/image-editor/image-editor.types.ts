@@ -5,6 +5,7 @@ export type Point = {
 
 export type ImageEditorTool =
   | "select"
+  | "line"
   | "arrow"
   | "rectangle"
   | "ellipse"
@@ -13,6 +14,7 @@ export type ImageEditorTool =
   | "text"
   | "step"
   | "measure"
+  | "erase"
   | "pixelate"
   | "crop";
 
@@ -51,6 +53,7 @@ export type MeasurePointerInfo = {
 
 export const toolLabels: Record<ImageEditorTool, string> = {
   select: "Select",
+  line: "Line",
   arrow: "Arrow",
   rectangle: "Rectangle",
   ellipse: "Ellipse",
@@ -59,6 +62,7 @@ export const toolLabels: Record<ImageEditorTool, string> = {
   text: "Text",
   step: "Step",
   measure: "Measure",
+  erase: "Delete pixels",
   pixelate: "Pixelate",
   crop: "Crop",
 };
@@ -90,6 +94,10 @@ export type TextAnnotationStyle =
   | "warning-label"
   | "code-label"
   | "numbered-callout";
+
+export type TextHorizontalAlign = "left" | "center" | "right";
+
+export type TextVerticalAlign = "top" | "middle" | "bottom";
 
 export type StepMarkerStyle =
   | "circle"
@@ -131,6 +139,20 @@ export type BaseAnnotation = {
   hidden?: boolean;
 };
 
+export type AttachedText = {
+  text: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  color: string;
+  backgroundColor: string;
+  fontSize: number;
+  textStyle?: TextAnnotationStyle;
+  textAlign?: TextHorizontalAlign;
+  verticalAlign?: TextVerticalAlign;
+};
+
 export type ArrowAnnotation = BaseAnnotation & {
   type: "arrow";
   start: Point;
@@ -138,10 +160,11 @@ export type ArrowAnnotation = BaseAnnotation & {
   color: string;
   strokeWidth: number;
   arrowStyle?: ArrowStyle;
+  text?: AttachedText;
 };
 
 export type BoxAnnotation = BaseAnnotation & {
-  type: "rectangle" | "ellipse" | "pixelate";
+  type: "rectangle" | "ellipse" | "pixelate" | "erase";
   x: number;
   y: number;
   width: number;
@@ -150,6 +173,7 @@ export type BoxAnnotation = BaseAnnotation & {
   fillColor: string;
   strokeWidth: number;
   rectangleStyle?: RectangleStyle;
+  text?: AttachedText;
 };
 
 export type PathAnnotation = BaseAnnotation & {
@@ -168,6 +192,10 @@ export type TextAnnotation = BaseAnnotation & {
   backgroundColor: string;
   fontSize: number;
   textStyle?: TextAnnotationStyle;
+  textAlign?: TextHorizontalAlign;
+  verticalAlign?: TextVerticalAlign;
+  width?: number;
+  height?: number;
 };
 
 export type StepAnnotation = BaseAnnotation & {
@@ -288,8 +316,10 @@ export const toolMatchesAnnotation = (
   annotation: ImageAnnotation,
 ) => {
   switch (tool) {
+    case "line":
+      return annotation.type === "arrow" && annotation.arrowStyle === "line-only";
     case "arrow":
-      return annotation.type === "arrow";
+      return annotation.type === "arrow" && annotation.arrowStyle !== "line-only";
     case "rectangle":
       return annotation.type === "rectangle";
     case "ellipse":
@@ -304,6 +334,8 @@ export const toolMatchesAnnotation = (
       return annotation.type === "step";
     case "measure":
       return annotation.type === "measure";
+    case "erase":
+      return annotation.type === "erase";
     case "pixelate":
       return annotation.type === "pixelate";
     case "select":

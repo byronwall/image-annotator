@@ -3,10 +3,19 @@ import type { JSX } from "solid-js";
 import { Box } from "styled-system/jsx";
 import { Input } from "~/components/ui/input";
 import { Textarea } from "~/components/ui/textarea";
-import { getTextRenderColors, getTextRenderMetrics } from "./image-editor.render";
-import { type StepAnnotation, type TextAnnotation } from "./image-editor.types";
+import { getTextRenderColors, getTextRenderLayout } from "./image-editor.render";
+import {
+  type ArrowAnnotation,
+  type BoxAnnotation,
+  type StepAnnotation,
+  type TextAnnotation,
+} from "./image-editor.types";
 
-export type EditableAnnotation = TextAnnotation | StepAnnotation;
+export type EditableAnnotation =
+  | TextAnnotation
+  | StepAnnotation
+  | ArrowAnnotation
+  | BoxAnnotation;
 
 export type InlineAnnotationEditorProps = {
   annotation: EditableAnnotation | undefined;
@@ -31,7 +40,7 @@ export const InlineAnnotationEditor = (props: InlineAnnotationEditorProps) => {
 
     setLastAnnotationId(annotation.id);
     window.setTimeout(() => {
-      if (annotation.type === "text") {
+      if (isTextLikeAnnotation(annotation)) {
         textareaRef?.focus();
         textareaRef?.select();
       } else {
@@ -66,9 +75,9 @@ export const InlineAnnotationEditor = (props: InlineAnnotationEditorProps) => {
   return (
     <Show when={props.annotation}>
       {(annotation) => (
-        <Box position="absolute" zIndex="20" style={props.style}>
+        <Box position="absolute" zIndex="20" overflow="visible" style={props.style}>
           <Show
-            when={asTextAnnotation(annotation())}
+            when={asTextLikeAnnotation(annotation())}
             fallback={
               <Show when={asStepAnnotation(annotation())}>
                 {(stepAnnotation) => (
@@ -95,21 +104,22 @@ export const InlineAnnotationEditor = (props: InlineAnnotationEditorProps) => {
               <Textarea
                 ref={textareaRef}
                 aria-label="Edit annotation text"
-                value={textAnnotation().text}
-                autoResize={false}
+                value={textAnnotationValue(textAnnotation())}
+                autoResize
                 onInput={(event) =>
                   props.onChange(textAnnotation().id, event.currentTarget.value)
                 }
                 onBlur={props.onCommit}
                 onKeyDown={handleKeyDown}
-                wrap="off"
+                wrap="soft"
+                rows={1}
+                cols={1}
                 width="full"
-                h="full"
                 borderWidth="0"
                 boxShadow="none"
                 resize="none"
                 overflow="hidden"
-                style={textEditorStyle(textAnnotation(), props.scale)}
+                style={textEditorStyle(textAnnotationStyleSource(textAnnotation()), props.scale)}
               />
             )}
           </Show>
@@ -119,23 +129,66 @@ export const InlineAnnotationEditor = (props: InlineAnnotationEditorProps) => {
   );
 };
 
-const asTextAnnotation = (
+const asTextLikeAnnotation = (
   annotation: EditableAnnotation,
-): TextAnnotation | undefined =>
-  annotation.type === "text" ? annotation : undefined;
+): TextAnnotation | ArrowAnnotation | BoxAnnotation | undefined =>
+  annotation.type === "text" ||
+  annotation.type === "arrow" ||
+  annotation.type === "rectangle" ||
+  annotation.type === "ellipse" ||
+  annotation.type === "pixelate" ||
+  annotation.type === "erase"
+    ? annotation
+    : undefined;
+
+const isTextLikeAnnotation = (annotation: EditableAnnotation) =>
+  asTextLikeAnnotation(annotation) !== undefined;
 
 const asStepAnnotation = (
   annotation: EditableAnnotation,
 ): StepAnnotation | undefined =>
   annotation.type === "step" ? annotation : undefined;
 
+const textAnnotationValue = (
+  annotation: TextAnnotation | ArrowAnnotation | BoxAnnotation,
+) => (annotation.type === "text" ? annotation.text : annotation.text?.text ?? "");
+
+const textAnnotationStyleSource = (
+  annotation: TextAnnotation | ArrowAnnotation | BoxAnnotation,
+): TextAnnotation =>
+  annotation.type === "text"
+    ? annotation
+    : {
+        id: annotation.id,
+        type: "text",
+        createdAt: annotation.createdAt,
+        opacity: annotation.opacity,
+        x: annotation.text?.x ?? 0,
+        y: annotation.text?.y ?? 0,
+        text: annotation.text?.text ?? "",
+        color: annotation.text?.color ?? "#0f172a",
+        backgroundColor: annotation.text?.backgroundColor ?? "rgba(255, 255, 255, 0.94)",
+        fontSize: annotation.text?.fontSize ?? 24,
+        textStyle: annotation.text?.textStyle ?? "light-label",
+        textAlign: annotation.text?.textAlign,
+        verticalAlign: annotation.text?.verticalAlign,
+        width: annotation.text?.width,
+        height: annotation.text?.height,
+      };
+
 const textEditorStyle = (
   annotation: TextAnnotation,
   scale: number,
 ): JSX.CSSProperties => {
-  const metrics = getTextRenderMetrics(annotation);
+  const layout = getTextRenderLayout(annotation);
+  const metrics = layout.metrics;
   const colors = getTextRenderColors(annotation);
   const visualScale = Math.max(0.01, scale);
+  const shouldWrap = annotation.width !== undefined || layout.isAutoWidthCapped;
+  const border =
+    colors.borderColor === "rgba(255, 255, 255, 0)"
+      ? "0"
+      : `${Math.max(1, visualScale)}px solid ${colors.borderColor}`;
 
   return {
     color: colors.color,
@@ -145,8 +198,9 @@ const textEditorStyle = (
     "font-size": `${annotation.fontSize * visualScale}px`,
     "font-weight": metrics.fontWeight,
     "line-height": `${metrics.lineHeight * visualScale}px`,
-    padding: `${metrics.paddingY * visualScale}px ${metrics.paddingX * visualScale}px`,
-    border: "0",
+    "text-align": annotation.textAlign ?? "left",
+    padding: `${layout.textStartY * visualScale}px ${metrics.paddingX * visualScale}px ${metrics.paddingY * visualScale}px ${layout.textStartX * visualScale}px`,
+    border,
     "border-radius": `${metrics.borderRadius * visualScale}px`,
     "box-shadow": "none",
     outline: "none",
@@ -154,6 +208,8 @@ const textEditorStyle = (
     overflow: "hidden",
     "box-sizing": "border-box",
     "caret-color": colors.color,
-    "white-space": "pre",
+    "white-space": shouldWrap ? "pre-wrap" : "pre",
+    "overflow-wrap": shouldWrap ? "break-word" : "normal",
+    "word-break": "normal",
   };
 };
